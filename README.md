@@ -10,6 +10,10 @@
 [![Tests](https://img.shields.io/badge/Tests-79%20Passing-brightgreen)]()
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
+<p align="center">
+  <img src="docs/screenshots/demo.gif" alt="Demo" width="700">
+</p>
+
 ```
  KMeans      MiniBatch      OnlineKMeans      DBSCAN
   0.2ms        0.1ms           0.1ms           2ms
