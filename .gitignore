@@ -1,0 +1,16 @@
+build/
+data/
+benchmarks/data/
+imgui.ini
+.vscode/
+test_gl
+test_gl.cpp
+test_points.cpp
+*.o
+*.so
+*.exe
+*.dll
+*.dylib
+__pycache__/
+*.pyc
+.cache/

@@ -1,0 +1,146 @@
+// ============================================================================
+// test_matrix.cpp -- Matrix and Vector unit tests.
+// Tests: construction, resize, fill, element access, row-major layout.
+// ============================================================================
+
+#include <gtest/gtest.h>
+#include "clustering/matrix.h"
+
+using namespace clustering;
+
+TEST(Matrix, DefaultConstructor) {
+    Matrix m;
+    EXPECT_EQ(m.rows(), 0u);
+    EXPECT_EQ(m.cols(), 0u);
+    EXPECT_EQ(m.size(), 0u);
+}
+
+TEST(Matrix, SizeConstructor) {
+    Matrix m(10, 5);
+    EXPECT_EQ(m.rows(), 10u);
+    EXPECT_EQ(m.cols(), 5u);
+    EXPECT_EQ(m.size(), 50u);
+    // Should be zero-initialized
+    for (size_t i = 0; i < 50; i++)
+        EXPECT_FLOAT_EQ(m.data()[i], 0.0f);
+}
+
+TEST(Matrix, DataConstructor) {
+    float raw[] = {1, 2, 3, 4, 5, 6};
+    Matrix m(2, 3, raw);
+    EXPECT_EQ(m.rows(), 2u);
+    EXPECT_EQ(m.cols(), 3u);
+    EXPECT_FLOAT_EQ(m[0][0], 1.0f);
+    EXPECT_FLOAT_EQ(m[0][1], 2.0f);
+    EXPECT_FLOAT_EQ(m[0][2], 3.0f);
+    EXPECT_FLOAT_EQ(m[1][0], 4.0f);
+    EXPECT_FLOAT_EQ(m[1][1], 5.0f);
+    EXPECT_FLOAT_EQ(m[1][2], 6.0f);
+}
+
+TEST(Matrix, ElementAccess) {
+    Matrix m(3, 4);
+    m[1][2] = 7.0f;
+    EXPECT_FLOAT_EQ(m[1][2], 7.0f);
+    m[2][3] = 9.0f;
+    EXPECT_FLOAT_EQ(m[2][3], 9.0f);
+    // Other elements should still be 0
+    EXPECT_FLOAT_EQ(m[0][0], 0.0f);
+    EXPECT_FLOAT_EQ(m[0][3], 0.0f);
+}
+
+TEST(Matrix, Resize) {
+    Matrix m(2, 2);
+    m[0][0] = 1.0f; m[0][1] = 2.0f;
+    m[1][0] = 3.0f; m[1][1] = 4.0f;
+
+    m.resize(3, 3); // Grow -- resize does NOT preserve data (fills with 0)
+    EXPECT_EQ(m.rows(), 3u);
+    EXPECT_EQ(m.cols(), 3u);
+    EXPECT_FLOAT_EQ(m[2][2], 0.0f); // New elements zero
+
+    m[0][0] = 99.0f; // Set a value after resize
+    m.resize(1, 1);  // Shrink
+    EXPECT_EQ(m.rows(), 1u);
+    EXPECT_EQ(m.cols(), 1u);
+    EXPECT_FLOAT_EQ(m[0][0], 99.0f); // First element preserved (vector::resize shrink keeps front elements)
+}
+
+TEST(Matrix, Fill) {
+    Matrix m(5, 3);
+    m.fill(42.0f);
+    for (size_t i = 0; i < 5; i++)
+        for (size_t j = 0; j < 3; j++)
+            EXPECT_FLOAT_EQ(m[i][j], 42.0f);
+}
+
+TEST(Matrix, ConstAccess) {
+    Matrix m(2, 2);
+    m[0][0] = 5.0f;
+    m[1][1] = 7.0f;
+    const Matrix& cm = m;
+    EXPECT_FLOAT_EQ(cm[0][0], 5.0f);
+    EXPECT_FLOAT_EQ(cm[1][1], 7.0f);
+    EXPECT_FLOAT_EQ(cm.data()[3], 7.0f); // Raw access
+}
+
+TEST(Matrix, RowMajorLayout) {
+    // Verify row-major: m[0][0], m[0][1], m[1][0], m[1][1]
+    float raw[] = {10, 20, 30, 40};
+    Matrix m(2, 2, raw);
+    EXPECT_FLOAT_EQ(m.data()[0], 10.0f); // row 0, col 0
+    EXPECT_FLOAT_EQ(m.data()[1], 20.0f); // row 0, col 1
+    EXPECT_FLOAT_EQ(m.data()[2], 30.0f); // row 1, col 0
+    EXPECT_FLOAT_EQ(m.data()[3], 40.0f); // row 1, col 1
+}
+
+TEST(Vector, DefaultConstructor) {
+    Vector v;
+    EXPECT_EQ(v.size(), 0u);
+}
+
+TEST(Vector, SizeConstructor) {
+    Vector v(100);
+    EXPECT_EQ(v.size(), 100u);
+    for (size_t i = 0; i < 100; i++)
+        EXPECT_FLOAT_EQ(v[i], 0.0f);
+}
+
+TEST(Vector, DataConstructor) {
+    float raw[] = {1, 2, 3, 4, 5};
+    Vector v(5, raw);
+    EXPECT_EQ(v.size(), 5u);
+    EXPECT_FLOAT_EQ(v[0], 1.0f);
+    EXPECT_FLOAT_EQ(v[4], 5.0f);
+}
+
+TEST(Vector, ElementAccess) {
+    Vector v(3);
+    v[1] = 99.0f;
+    EXPECT_FLOAT_EQ(v[1], 99.0f);
+}
+
+TEST(Vector, Resize) {
+    Vector v(5);
+    v[0] = 1.0f; v[4] = 5.0f;
+    v.resize(10);
+    EXPECT_EQ(v.size(), 10u);
+    EXPECT_FLOAT_EQ(v[9], 0.0f);
+}
+
+TEST(Vector, Fill) {
+    Vector v(10);
+    v.fill(-1.0f);
+    for (size_t i = 0; i < 10; i++)
+        EXPECT_FLOAT_EQ(v[i], -1.0f);
+}
+
+TEST(Vector, ConstAccess) {
+    Vector v(3);
+    v[0] = 10.0f; v[2] = 30.0f;
+    const Vector& cv = v;
+    EXPECT_FLOAT_EQ(cv[0], 10.0f);
+    EXPECT_FLOAT_EQ(cv[1], 0.0f);
+    EXPECT_FLOAT_EQ(cv[2], 30.0f);
+    EXPECT_FLOAT_EQ(cv.data()[0], 10.0f);
+}
