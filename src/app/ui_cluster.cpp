@@ -38,8 +38,6 @@ void render_select_columns(AppState& g) {
 }
 
 void render_select_algorithm(AppState& g) {
-    if (!g.data_loaded) return;
-
     if (ImGui::CollapsingHeader("Algorithm", ImGuiTreeNodeFlags_DefaultOpen)) {
         static const char* algos[] = {"KMeans", "MiniBatchKMeans", "OnlineKMeans", "DBSCAN"};
         static int prev_algo = 0;
@@ -59,8 +57,6 @@ void render_select_algorithm(AppState& g) {
 }
 
 void render_algo_params(AppState& g) {
-    if (!g.data_loaded) return;
-
     if (ImGui::CollapsingHeader("Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (g.selected_algo == 3) {
             // DBSCAN
