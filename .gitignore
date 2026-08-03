@@ -1,16 +1,42 @@
+# Build directories
 build/
+out/
+cmake-build-*/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Data files (too large for git)
 data/
 benchmarks/data/
+
+# ImGui settings
 imgui.ini
-.vscode/
-test_gl
-test_gl.cpp
-test_points.cpp
+
+# Compiled objects
 *.o
+*.obj
 *.so
-*.exe
-*.dll
 *.dylib
+*.dll
+*.exe
+*.a
+*.lib
+
+# Python
 __pycache__/
 *.pyc
-.cache/
+*.pyo
+.venv/
+venv/
+
+# CMake user presets
+CMakeUserPresets.json
