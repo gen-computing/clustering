@@ -88,9 +88,9 @@ int main() {
             ImGuiWindowFlags_NoBringToFrontOnFocus);
 
         if (ImGui::BeginTabBar("##Tabs")) {
-            if (ImGui::BeginTabItem("Preprocess")) active_tab = 0;
-            if (ImGui::BeginTabItem("Dimensionality Reduction")) active_tab = 1;
-            if (ImGui::BeginTabItem("Cluster & Evaluate")) active_tab = 2;
+            if (ImGui::BeginTabItem("Preprocess")) { active_tab = 0; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Dimensionality Reduction")) { active_tab = 1; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Cluster & Evaluate")) { active_tab = 2; ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
 

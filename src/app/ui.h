@@ -181,7 +181,10 @@ void render_preprocessing(AppState& g);
 // Tab 1: Dimensionality Reduction panel (PCA + t-SNE)
 void render_dimred(AppState& g);
 
-// Tab 2: Clustering panel
+// Tab 2: Clustering panels
+void render_select_columns(AppState& g);
+void render_select_algorithm(AppState& g);
+void render_algo_params(AppState& g);
 void render_clustering(AppState& g);
 
 // Tab 2: Find Optimal k panel
