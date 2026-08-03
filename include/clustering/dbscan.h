@@ -60,7 +60,10 @@ private:
     std::vector<bool> visited_;
 
     std::unique_ptr<KDTreeAdaptor> kdtree_adaptor_;
-    void* kdtree_index_ = nullptr;
+    void* kdtree_index_ = nullptr;  // Cached KD-tree for predict()
+
+    // Pre-allocated work buffers (avoid per-expand allocation)
+    mutable std::vector<uint8_t> in_seeds_;
 };
 
 } // namespace clustering

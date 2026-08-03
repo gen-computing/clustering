@@ -152,14 +152,20 @@ private:
 
     // ----- MEMBER VARIABLES -----
 
-    OnlineConfig online_config_;            // Streaming-specific settings
-    size_t points_seen_;                    // Total count of points processed
-    std::vector<float> cluster_counts_;     // Per-cluster point counts (with decay)
-    std::deque<std::vector<float>> window_; // Sliding window storage (FIFO buffer)
-                                            // std::deque allows efficient push_back
-                                            // and pop_front (add new, remove old).
-    DriftDetector drift_detector_;          // Monitors for concept drift
-    size_t since_last_retrain_;             // Counter: points since last drift check
+    OnlineConfig online_config_;
+    size_t points_seen_;
+    std::vector<float> cluster_counts_;
+
+    // Sliding window: flat ring buffer (no per-point heap allocation).
+    // Stores points contiguously: window_data_[write_pos * dim .. write_pos * dim + dim - 1]
+    // write_pos_ cycles 0..window_size-1. window_count_ tracks how many valid entries.
+    std::vector<float> window_data_;     // Flat buffer: window_size * dim floats
+    size_t write_pos_ = 0;              // Write position in ring buffer
+    size_t window_count_ = 0;           // Number of valid entries in window
+    size_t window_dim_ = 0;             // Feature dimension (set on first use)
+
+    DriftDetector drift_detector_;
+    size_t since_last_retrain_;
 };
 
 } // namespace clustering

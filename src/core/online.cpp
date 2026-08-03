@@ -169,21 +169,21 @@ void OnlineKMeans::partial_fit_point(const float* point, size_t dim) {
 // ============================================================================
 
 void OnlineKMeans::update_with_window(const float* point, size_t dim) {
-    // Copy the raw float array into a std::vector<float>.
-    // std::vector<float>(pointer, pointer + size) copies the range.
-    // We need to copy because the original pointer may be temporary.
-    std::vector<float> pt(point, point + dim);
-
-    // Add to the back of the sliding window.
-    window_.push_back(pt);
-
-    // If window is too large, remove the OLDEST point from the front.
-    // std::deque::pop_front() is O(1) -- constant time.
-    while (window_.size() > online_config_.window_size) {
-        window_.pop_front();
+    // Lazy-init ring buffer on first call
+    if (window_data_.empty()) {
+        window_dim_ = dim;
+        window_data_.resize(online_config_.window_size * dim);
     }
 
-    // ---- Find nearest centroid (same as the no-window path) ----
+    // Write point into ring buffer at current position (no heap allocation)
+    float* dst = &window_data_[write_pos_ * window_dim_];
+    for (size_t d = 0; d < dim; ++d) dst[d] = point[d];
+
+    // Advance write pointer (circular)
+    write_pos_ = (write_pos_ + 1) % online_config_.window_size;
+    if (window_count_ < online_config_.window_size) window_count_++;
+
+    // ---- Find nearest centroid ----
     size_t nearest = 0;
     float min_dist = l2_distance_avx2(point, centroids()[0], dim);
 
@@ -214,36 +214,25 @@ void OnlineKMeans::update_with_window(const float* point, size_t dim) {
 // ============================================================================
 
 void OnlineKMeans::check_drift_and_retrain() {
-    // Need enough data in the window to make a meaningful assessment.
-    // With fewer than 10 points, the metrics are noise.
-    if (window_.size() < 10) return;
+    if (window_count_ < 10) return;
 
-    // Sample up to 100 points from the window for the drift check.
-    // Using all points might be O(n²) and slow; 100 is enough for a
-    // statistical check of cluster quality.
-    size_t n = std::min(window_.size(), static_cast<size_t>(100));
+    size_t n = std::min(window_count_, static_cast<size_t>(100));
     size_t d = centroids().cols();
+    Matrix X(n, d);
 
-    Matrix X(n, d);  // Sampled data matrix for the drift detector
-
-    // Evenly spaced sampling: take every (window_size / n)-th point.
-    // This gives a representative sample without clustering bias.
-    size_t step = window_.size() / n;
+    // Evenly spaced sampling from ring buffer
+    size_t step = window_count_ / n;
     for (size_t i = 0; i < n; ++i) {
-        size_t idx = i * step;
+        size_t src_pos = (write_pos_ + i * step) % online_config_.window_size;
+        const float* pt = &window_data_[src_pos * window_dim_];
         for (size_t j = 0; j < d; ++j) {
-            X[i][j] = window_[idx][j];
+            X[i][j] = pt[j];
         }
     }
 
-    // Predict labels using the CURRENT centroids.
     Vector labels = predict(X);
-
-    // Compute drift metrics (silhouette, Davies-Bouldin, Calinski-Harabasz, stability).
     DriftMetrics metrics = drift_detector_.check(X, labels, centroids());
 
-    // If drift is detected (silhouette score degraded beyond threshold),
-    // do a full retrain from the sliding window data.
     if (metrics.drift_detected) {
         retrain();
     }
@@ -258,23 +247,23 @@ void OnlineKMeans::check_drift_and_retrain() {
 // ============================================================================
 
 void OnlineKMeans::retrain() {
-    // Need at least as many points as clusters. Can't train k=5 with 3 points.
-    if (window_.size() < config_.k) return;
+    if (window_count_ < config_.k) return;
 
-    // Convert the window (deque<vector<float>>) into a Matrix.
-    size_t n = window_.size();
+    size_t n = window_count_;
     size_t d = centroids().cols();
     Matrix X(n, d);
 
+    // Copy from ring buffer into Matrix
+    // Ring buffer wraps: entries 0..write_pos_-1 are newest, write_pos_..end are older
+    // But for retrain we just need the data in order, so iterate linearly
     for (size_t i = 0; i < n; ++i) {
+        size_t src_pos = (write_pos_ + i) % online_config_.window_size;
+        const float* pt = &window_data_[src_pos * window_dim_];
         for (size_t j = 0; j < d; ++j) {
-            X[i][j] = window_[i][j];
+            X[i][j] = pt[j];
         }
     }
 
-    // Full KMeans fit on the window data.
-    // This will recompute centroids from scratch, potentially finding
-    // a completely different cluster structure if the data has drifted.
     fit(X);
 }
 
@@ -287,25 +276,19 @@ void OnlineKMeans::retrain() {
 // ============================================================================
 
 float OnlineKMeans::compute_window_inertia() const {
-    if (window_.empty()) return 0.0f;
+    if (window_count_ == 0) return 0.0f;
 
     float inertia = 0.0f;
-    // For each point in the window...
-    for (const auto& pt : window_) {
-        // Find nearest centroid
+    for (size_t i = 0; i < window_count_; ++i) {
+        size_t src_pos = (write_pos_ + i) % online_config_.window_size;
+        const float* pt = &window_data_[src_pos * window_dim_];
         size_t nearest = 0;
-        float min_dist = l2_distance_avx2(pt.data(), centroids()[0], pt.size());
+        float min_dist = l2_distance_avx2(pt, centroids()[0], window_dim_);
 
         for (size_t c = 1; c < centroids().rows(); ++c) {
-            float dist = l2_distance_avx2(pt.data(), centroids()[c], pt.size());
-            if (dist < min_dist) {
-                min_dist = dist;
-                nearest = c;
-            }
+            float dist = l2_distance_avx2(pt, centroids()[c], window_dim_);
+            if (dist < min_dist) { min_dist = dist; nearest = c; }
         }
-
-        // Sum the distance (not squared) to nearest centroid.
-        // This is a simplified inertia -- usually we'd sum squared distances.
         inertia += min_dist;
     }
 

@@ -128,8 +128,9 @@ void DBSCAN::expand_cluster(size_t point_idx, size_t cluster_id) {
     std::vector<size_t> seeds;
     region_query(point_idx, seeds);
 
-    std::vector<uint8_t> in_seeds(X_.rows(), 0);
-    for (size_t s : seeds) in_seeds[s] = 1;
+    // Use pre-allocated member instead of per-call vector allocation
+    in_seeds_.assign(X_.rows(), 0);
+    for (size_t s : seeds) in_seeds_[s] = 1;
 
     for (size_t si = 0; si < seeds.size(); ++si) {
         size_t current = seeds[si];
@@ -141,8 +142,8 @@ void DBSCAN::expand_cluster(size_t point_idx, size_t cluster_id) {
 
             if (current_neighbors.size() >= config_.min_pts) {
                 for (size_t nbr : current_neighbors) {
-                    if (!in_seeds[nbr]) {
-                        in_seeds[nbr] = 1;
+                    if (!in_seeds_[nbr]) {
+                        in_seeds_[nbr] = 1;
                         seeds.push_back(nbr);
                     }
                 }
@@ -165,20 +166,18 @@ Vector DBSCAN::predict(const Matrix& X) const {
     size_t n = X.rows();
     Vector result(n);
 
-    // Build a temporary KD-tree from training data
-    KDTreeAdaptor adaptor(X_);
-    KDTreeIndex index(3, adaptor);
-    index.buildIndex();
+    // Use cached KD-tree from fit() (no rebuild)
+    auto* index = static_cast<KDTreeIndex*>(kdtree_index_);
 
     for (size_t i = 0; i < n; ++i) {
-        float query_point[3];
-        for (size_t d = 0; d < X.cols(); ++d) {
+        float query_point[KD_DIM] = {0, 0, 0};
+        for (size_t d = 0; d < X.cols() && d < KD_DIM; ++d) {
             query_point[d] = X[i][d];
         }
 
         size_t nearest_idx;
         float nearest_dist_sq;
-        index.knnSearch(query_point, 1, &nearest_idx, &nearest_dist_sq);
+        index->knnSearch(query_point, 1, &nearest_idx, &nearest_dist_sq);
 
         if (std::sqrt(nearest_dist_sq) <= config_.epsilon) {
             result[i] = labels_[nearest_idx];
