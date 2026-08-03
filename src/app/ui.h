@@ -212,6 +212,7 @@ void render_status_bar(AppState& g);
 void open_csv(AppState& g);
 void export_labels_csv(const AppState& g);
 void export_centroids_csv(const AppState& g);
+void export_preprocessed_csv(const AppState& g);
 void export_png(const AppState& g);
 void export_report(const AppState& g);
 void apply_preprocess(AppState& g);

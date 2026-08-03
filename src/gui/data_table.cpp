@@ -38,7 +38,7 @@ void DataTable::set_data(const Matrix& data, std::vector<std::string> col_names)
     if (col_names.empty()) {
         col_names_.clear();
         for (size_t j = 0; j < data.cols(); ++j)
-            col_names_.push_back("Col_" + std::to_string(j));
+            col_names_.push_back(std::string(1, 'A' + (char)j));
     } else {
         col_names_ = std::move(col_names);
     }

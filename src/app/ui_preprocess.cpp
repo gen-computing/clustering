@@ -157,6 +157,11 @@ void render_preprocessing(AppState& g) {
                 }
                 ImGui::EndChild();
             }
+
+            ImGui::Separator();
+            if (ImGui::Button("Export Preprocessed CSV", ImVec2(-1, 28))) {
+                export_preprocessed_csv(g);
+            }
         }
     }
 }

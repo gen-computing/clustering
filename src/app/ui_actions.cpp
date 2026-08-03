@@ -108,6 +108,33 @@ void export_centroids_csv(const AppState& g) {
     fclose(f);
 }
 
+void export_preprocessed_csv(const AppState& g) {
+    const char* path = tinyfd_saveFileDialog("Export Preprocessed Data", "preprocessed.csv", 0, nullptr, nullptr);
+    if (!path) return;
+    FILE* f = fopen(path, "w");
+    if (!f) return;
+
+    // Write header (column names)
+    for (size_t j = 0; j < g.table.cols(); ++j) {
+        if (j > 0) fprintf(f, ",");
+        fprintf(f, "%s", g.table.column_names()[j].c_str());
+    }
+    fprintf(f, "\n");
+
+    // Write data rows
+    for (size_t i = 0; i < g.table.rows(); ++i) {
+        for (size_t j = 0; j < g.table.cols(); ++j) {
+            if (j > 0) fprintf(f, ",");
+            if (g.table.is_missing(i, j))
+                fprintf(f, "");
+            else
+                fprintf(f, "%f", g.table.data()[i][j]);
+        }
+        fprintf(f, "\n");
+    }
+    fclose(f);
+}
+
 void export_png(const AppState& g) {
     const char* path = tinyfd_saveFileDialog("Export PNG", "screenshot.png", 0, nullptr, nullptr);
     if (!path || !g.renderer_ready) return;

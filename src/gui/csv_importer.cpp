@@ -79,7 +79,7 @@ CSVLoadResult CSVImporter::load(const std::string& path,
         if (first) {
             numeric_cols.resize(cells.size(), true);
             for (size_t j = 0; j < cells.size(); ++j)
-                col_names.push_back("Col_" + std::to_string(j));
+                col_names.push_back(std::string(1, 'A' + (char)j));
             first = false;
         }
 
