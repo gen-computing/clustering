@@ -10,10 +10,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ==============================================================================
 option(BUILD_EXAMPLES    "Build example executables"           ON)
 option(BUILD_BENCHMARK   "Build benchmark executable"          ON)
-option(BUILD_GUI         "Build interactive GUI (requires GLFW/GLEW/OpenGL)" ON)
-option(BUILD_TESTS       "Build test suite (requires GTest)"   ON)
-option(BUILD_PYTHON      "Build Python bindings (requires pybind11)" OFF)
-option(CLUSTERING_DEBUG  "Enable detailed debug logging"       OFF)
+option(BUILD_GUI         "Build interactive GUI"               ON)
+option(BUILD_TESTS       "Build test suite"                    ON)
+option(BUILD_PYTHON      "Build Python bindings"               OFF)
+option(CLUSTERING_DEBUG  "Enable debug logging"                OFF)
 
 # ==============================================================================
 # Compiler flags
@@ -31,61 +31,33 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     endif()
 elseif(MSVC)
     add_compile_options(/W4 /O2 /bigobj)
-    # MSVC doesn't support -fPIC, -mavx2, -mfma as flags
-    # AVX2 is enabled via /arch:AVX2 for specific files if needed
 endif()
 
 if(CLUSTERING_DEBUG)
     add_compile_definitions(CLUSTERING_DEBUG)
-    message(STATUS "Clustering debug logging: ENABLED")
 endif()
 
 # ==============================================================================
-# Dependencies
+# Dependencies — standard find_package, no vcpkg
 # ==============================================================================
-find_package(Eigen3 QUIET)
 find_package(Threads REQUIRED)
 find_package(OpenGL REQUIRED)
-
-# GLFW — find_package first, then vcpkg fallback on Windows
 find_package(glfw3 3.3 QUIET)
-if(NOT glfw3_FOUND AND WIN32)
-    find_library(GLFW_LIB glfw3
-        PATHS $ENV{VCPKG_ROOT}/installed/x64-windows/lib)
-    find_path(GLFW_INCLUDE glfw3.h
-        PATHS $ENV{VCPKG_ROOT}/installed/x64-windows/include)
-    if(GLFW_LIB AND GLFW_INCLUDE)
-        add_library(glfw UNKNOWN IMPORTED)
-        set_target_properties(glfw PROPERTIES
-            IMPORTED_LOCATION "${GLFW_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${GLFW_INCLUDE}")
-        set(glfw3_FOUND TRUE)
-        message(STATUS "Found GLFW: ${GLFW_LIB}")
-    endif()
-endif()
-
-# GLEW — find_package first, then vcpkg fallback on Windows
 find_package(GLEW QUIET)
-if(NOT GLEW_FOUND AND WIN32)
-    find_library(GLEW_LIB GLEW
-        PATHS $ENV{VCPKG_ROOT}/installed/x64-windows/lib)
-    find_path(GLEW_INCLUDE GL/glew.h
-        PATHS $ENV{VCPKG_ROOT}/installed/x64-windows/include)
-    if(GLEW_LIB AND GLEW_INCLUDE)
-        add_library(GLEW::GLEW UNKNOWN IMPORTED)
-        set_target_properties(GLEW::GLEW PROPERTIES
-            IMPORTED_LOCATION "${GLEW_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${GLEW_INCLUDE}")
-        set(GLEW_FOUND TRUE)
-        message(STATUS "Found GLEW: ${GLEW_LIB}")
-    endif()
-endif()
-
-# GTest (optional)
+find_package(Eigen3 QUIET)
 find_package(GTest QUIET)
 
+# Clear error if required GUI deps missing
+if(BUILD_GUI AND (NOT glfw3_FOUND OR NOT GLEW_FOUND))
+    message(WARNING "GLFW or GLEW not found. Set BUILD_GUI=OFF or install them.")
+    message(WARNING "  Linux:   sudo apt install libglfw3-dev libglew-dev")
+    message(WARNING "  macOS:   brew install glfw glew")
+    message(WARNING "  Windows: download from glfw.org and glew.sourceforge.net")
+    set(BUILD_GUI OFF)
+endif()
+
 # ==============================================================================
-# Core library (standalone, no GUI dependencies)
+# Core library — standalone, no GUI dependencies
 # ==============================================================================
 set(CLUSTERING_CORE_SOURCES
     src/core/validate.cpp
@@ -120,7 +92,6 @@ if(WIN32)
     target_link_libraries(clustering PUBLIC opengl32)
 endif()
 
-# Optional Eigen + BLAS
 if(Eigen3_FOUND)
     target_link_libraries(clustering PUBLIC Eigen3::Eigen)
     find_package(BLAS QUIET)
@@ -131,9 +102,9 @@ if(Eigen3_FOUND)
 endif()
 
 # ==============================================================================
-# GUI library (optional, requires GLFW/GLEW/OpenGL)
+# GUI library — optional, requires GLFW/GLEW/OpenGL
 # ==============================================================================
-if(BUILD_GUI AND glfw3_FOUND AND GLEW_FOUND)
+if(BUILD_GUI)
     set(CLUSTERING_GUI_SOURCES
         src/visualization/renderer.cpp
         src/visualization/mat4.cpp
@@ -162,16 +133,12 @@ if(BUILD_GUI AND glfw3_FOUND AND GLEW_FOUND)
     if(WIN32)
         target_link_libraries(clustering_gui PUBLIC opengl32 glu32)
     endif()
-
-    message(STATUS "GUI target: ENABLED")
-else()
-    message(STATUS "GUI target: DISABLED (GLFW/GLEW not found, set BUILD_GUI=OFF to suppress)")
 endif()
 
 # ==============================================================================
 # ImGui interactive application
 # ==============================================================================
-if(BUILD_GUI AND glfw3_FOUND AND GLEW_FOUND)
+if(BUILD_GUI)
     add_executable(imgui_bench
         src/app/main.cpp
         extern/imgui/imgui.cpp
@@ -196,7 +163,7 @@ if(BUILD_GUI AND glfw3_FOUND AND GLEW_FOUND)
 endif()
 
 # ==============================================================================
-# Examples (optional)
+# Examples
 # ==============================================================================
 if(BUILD_EXAMPLES)
     add_executable(basic examples/basic_clustering.cpp)
@@ -205,14 +172,14 @@ if(BUILD_EXAMPLES)
     add_executable(streaming examples/streaming.cpp)
     target_link_libraries(streaming clustering)
 
-    if(BUILD_GUI AND glfw3_FOUND AND GLEW_FOUND)
+    if(BUILD_GUI)
         add_executable(viz examples/visualization.cpp)
         target_link_libraries(viz clustering_gui)
     endif()
 endif()
 
 # ==============================================================================
-# Benchmark (optional)
+# Benchmark
 # ==============================================================================
 if(BUILD_BENCHMARK)
     add_executable(benchmark_exe benchmarks/benchmark.cpp)
@@ -221,7 +188,7 @@ if(BUILD_BENCHMARK)
 endif()
 
 # ==============================================================================
-# Tests (optional)
+# Tests
 # ==============================================================================
 if(BUILD_TESTS AND GTest_FOUND)
     enable_testing()
@@ -246,22 +213,13 @@ install(TARGETS clustering
     ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
-
 install(DIRECTORY include/clustering DESTINATION include)
-
-# Install nanoflann header (needed by DBSCAN)
 install(DIRECTORY extern/nanoflann/ DESTINATION include/nanoflann
     FILES_MATCHING PATTERN "*.hpp")
 
-# Install GUI library if built
 if(TARGET clustering_gui)
-    install(TARGETS clustering_gui
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        RUNTIME DESTINATION bin)
+    install(TARGETS clustering_gui LIBRARY DESTINATION lib ARCHIVE DESTINATION lib)
 endif()
-
-# Install executables
 if(TARGET imgui_bench)
     install(TARGETS imgui_bench RUNTIME DESTINATION bin)
 endif()
@@ -276,7 +234,7 @@ if(TARGET benchmark_exe)
 endif()
 
 # ==============================================================================
-# Python bindings (optional)
+# Python bindings
 # ==============================================================================
 if(BUILD_PYTHON)
     find_package(pybind11 REQUIRED)
