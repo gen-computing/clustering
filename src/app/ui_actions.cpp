@@ -240,13 +240,17 @@ void undo_all(AppState& g) {
 
 void run_pca(AppState& g) {
     if (!g.data_loaded) return;
-    PCA pca((size_t)g.pca_components);
+    // Clamp components to valid range
+    size_t max_comp = std::min(g.table.rows(), g.table.cols());
+    if (max_comp < 2) { g.status_text = "PCA needs at least 2 samples and 2 features"; g.status_time = 3.0f; return; }
+    int n_comp = std::min(g.pca_components, (int)max_comp);
+    PCA pca((size_t)n_comp);
     g.reduced_data = pca.fit_transform(g.table.data());
     g.pca_var_ratio = pca.explained_variance_ratio();
     g.pca_total_var = pca.total_explained_variance_ratio();
     g.use_pca = true;
     g.clustering_done = false;
-    g.status_text = "PCA: " + std::to_string(g.reduced_data.rows()) + " x " + std::to_string(g.pca_components) + ", " + std::to_string((int)(g.pca_total_var * 100)) + "% var";
+    g.status_text = "PCA: " + std::to_string(g.reduced_data.rows()) + " x " + std::to_string(n_comp) + ", " + std::to_string((int)(g.pca_total_var * 100)) + "% var";
     g.status_time = 3.0f;
 }
 
