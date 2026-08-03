@@ -20,7 +20,8 @@ void render_select_columns(AppState& g) {
 
         ImGui::Text("%zu / %zu columns selected", nsel, g.selected_cols.size());
 
-        ImGui::BeginChild("ColSelect", ImVec2(0, ImGui::GetTextLineHeight() * 8), ImGuiChildFlags_Borders);
+        // Simple scrollable column list (no nested child window)
+        ImGui::BeginChild("##colscroll", ImVec2(0, ImGui::GetTextLineHeight() * 8));
         for (size_t j = 0; j < g.table.cols() && j < g.selected_cols.size(); ++j) {
             bool sel = g.selected_cols[j] != 0;
             char label[64]; snprintf(label, sizeof(label), "##col%zu", j);
