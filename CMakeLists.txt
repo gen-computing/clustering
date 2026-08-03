@@ -141,6 +141,13 @@ endif()
 if(BUILD_GUI)
     add_executable(imgui_bench
         src/app/main.cpp
+        src/app/ui_actions.cpp
+        src/app/ui_menu.cpp
+        src/app/ui_preprocess.cpp
+        src/app/ui_cluster.cpp
+        src/app/ui_viewport.cpp
+        src/app/ui_table.cpp
+        src/app/ui_status.cpp
         extern/imgui/imgui.cpp
         extern/imgui/imgui_draw.cpp
         extern/imgui/imgui_tables.cpp
