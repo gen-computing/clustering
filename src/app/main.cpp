@@ -89,7 +89,8 @@ int main() {
 
         if (ImGui::BeginTabBar("##Tabs")) {
             if (ImGui::BeginTabItem("Preprocess")) active_tab = 0;
-            if (ImGui::BeginTabItem("Cluster & Evaluate")) active_tab = 1;
+            if (ImGui::BeginTabItem("Dimensionality Reduction")) active_tab = 1;
+            if (ImGui::BeginTabItem("Cluster & Evaluate")) active_tab = 2;
             ImGui::EndTabBar();
         }
 
@@ -101,8 +102,17 @@ int main() {
             render_import(g);
             render_column_stats(g);
             render_preprocessing(g);
+        } else if (active_tab == 1) {
+            render_dimred(g);
         } else {
-            render_find_optimal_k(g);
+            render_select_columns(g);
+            render_select_algorithm(g);
+            render_algo_params(g);
+            if (g.selected_algo == 3) {
+                render_find_optimal_dbscan(g);
+            } else {
+                render_find_optimal_k(g);
+            }
             render_clustering(g);
         }
 
@@ -114,6 +124,8 @@ int main() {
         ImGui::BeginChild("RightPanel", ImVec2(0, 0));
         if (active_tab == 0) {
             render_data_table(g);
+        } else if (active_tab == 1) {
+            render_data_table(g);  // Show data table during dimred too
         } else {
             render_viewport(g);
             render_compare_history(g, active_tab);

@@ -144,6 +144,7 @@ if(BUILD_GUI)
         src/app/ui_actions.cpp
         src/app/ui_menu.cpp
         src/app/ui_preprocess.cpp
+        src/app/ui_dimred.cpp
         src/app/ui_cluster.cpp
         src/app/ui_viewport.cpp
         src/app/ui_table.cpp

@@ -37,6 +37,8 @@ using clustering::MissingHandler;
 using clustering::ColumnStats;
 using clustering::Renderer;
 using clustering::RendererConfig;
+using clustering::TSNE;
+using clustering::TSNEConfig;
 
 // ============================================================================
 // AppState — All global state for the interactive clustering tool.
@@ -70,6 +72,11 @@ struct AppState {
     // --- DBSCAN params ---
     float dbscan_eps = 0.5f;
     int dbscan_min_pts = 5;
+
+    // --- DBSCAN sweep ---
+    float eval_eps_min = 0.1f;
+    float eval_eps_max = 10.0f;
+    int eval_eps_steps = 10;
 
     // --- Clustering state ---
     bool realtime_viz = true;
@@ -121,6 +128,14 @@ struct AppState {
     Vector pca_var_ratio;
     float pca_total_var = 0;
 
+    // --- t-SNE ---
+    int tsne_perplexity = 30;
+    float tsne_lr = 200.0f;
+    int tsne_iter = 1000;
+    int tsne_seed = -1;
+    Matrix tsne_embedding;
+    bool tsne_done = false;
+
     // --- Viewport ---
     unsigned int fbo = 0;
     unsigned int fbo_texture = 0;
@@ -160,14 +175,20 @@ void render_import(AppState& g);
 // Tab 0: Column Stats panel
 void render_column_stats(AppState& g);
 
-// Tab 0: Preprocessing panel
+// Tab 1: Preprocessing panel
 void render_preprocessing(AppState& g);
 
-// Tab 1: Find Optimal k panel
+// Tab 1: Dimensionality Reduction panel (PCA + t-SNE)
+void render_dimred(AppState& g);
+
+// Tab 2: Clustering panel
+void render_clustering(AppState& g);
+
+// Tab 2: Find Optimal k panel
 void render_find_optimal_k(AppState& g);
 
-// Tab 1: Clustering panel
-void render_clustering(AppState& g);
+// Tab 2: Find Optimal DBSCAN params panel
+void render_find_optimal_dbscan(AppState& g);
 
 // Tab 0: Data table (right panel)
 void render_data_table(AppState& g);
