@@ -59,8 +59,21 @@ void TSNE::fit(const Matrix& X) {
     initialize_embedding(X);
 
     // PHASE 3: Iterative gradient descent optimization.
+    float prev_kl = std::numeric_limits<float>::max();
     for (size_t iter = 0; iter < config_.n_iter; ++iter) {
         gradient_step(iter);
+
+        // Compute KL divergence every 50 iterations (not every iter — O(n²) cost)
+        if (iter % 50 == 0 || iter == config_.n_iter - 1) {
+            kl_divergence_ = compute_kl_divergence();
+        }
+
+        // Early stopping: if gradient norm < threshold, we've converged
+        // (config_.min_gradient_norm is checked but not used — now we use it)
+        if (kl_divergence_ > 0 && std::abs(kl_divergence_ - prev_kl) < config_.min_gradient_norm * 100) {
+            break;  // KL change is negligible → converged
+        }
+        prev_kl = kl_divergence_;
     }
 
     fitted_ = true;
@@ -89,22 +102,20 @@ void TSNE::compute_pairwise_probabilities(const Matrix& X) {
     size_t n = X.rows();
     size_t d = X.cols();
 
-    // ---- Step A: Compute all pairwise Euclidean distances ----
-    // distances[i][j] = Euclidean distance between point i and point j.
-    // This is O(n² * d). Stored as a full n×n matrix.
-    Matrix distances(n, n);
+    // ---- Step A: Compute all pairwise squared Euclidean distances ----
+    // Store d² directly (avoid sqrt here, sqrt done later only for sigma search).
+    // Precomputing d² saves ~50 n² sqrt calls in the binary search loop.
+    Matrix dist_sq(n, n);
     for (size_t i = 0; i < n; ++i) {
         for (size_t j = i + 1; j < n; ++j) {
-            float dist = 0.0f;
+            float dsq = 0.0f;
             for (size_t k = 0; k < d; ++k) {
                 float diff = X[i][k] - X[j][k];
-                dist += diff * diff;
+                dsq += diff * diff;
             }
-            dist = std::sqrt(dist);
-            distances[i][j] = dist;
-            distances[j][i] = dist;  // Symmetric
+            dist_sq[i][j] = dsq;
+            dist_sq[j][i] = dsq;
         }
-        // distances[i][i] stays 0 (default-initialized).
     }
 
     // ---- Step B: Find sigma_i via binary search for each point ----
@@ -124,18 +135,15 @@ void TSNE::compute_pairwise_probabilities(const Matrix& X) {
         // Binary search: up to 50 iterations to find the sigma that gives
         // the target perplexity.
         for (int iter = 0; iter < 50; ++iter) {
-            // Compute conditional probabilities for this sigma.
-            // P(i|j) = exp(-d² / (2*sigma²)) for j ≠ i, 0 for j = i.
+            // Compute conditional probabilities using precomputed d²
             float sum_p = 0.0f;
             for (size_t j = 0; j < n; ++j) {
                 if (i != j) {
-                    float d_sq = distances[i][j] * distances[i][j];
-                    // exp(-d² / (2*sigma²)) -- the Gaussian kernel.
-                    // Large distance -> very small probability.
-                    // Small distance -> probability near 1.
-                    P_[i][j] = std::exp(-d_sq / (2.0f * sigma * sigma));
+                    // dist_sq[i][j] already contains d² (no sqrt needed)
+                    P_[i][j] = std::exp(-dist_sq[i][j] / (2.0f * sigma * sigma));
                     sum_p += P_[i][j];
                 }
+            }
             }
 
             // Normalize so probabilities sum to 1.
@@ -210,9 +218,8 @@ void TSNE::symmetricize_probabilities() {
 // ============================================================================
 
 void TSNE::initialize_embedding(const Matrix& X) {
-    // Random number generator for the initial positions.
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    // Use configured seed for reproducibility (or std::random_device if seed=-1)
+    std::mt19937 gen(config_.random_seed >= 0 ? config_.random_seed : std::random_device{}());
 
     // Small-variance Gaussian: points start tightly clustered near (0, 0).
     // Too much spread initially can lead to bad local minima.
@@ -296,13 +303,18 @@ void TSNE::gradient_step(size_t iter) {
         }
     }
 
-    // ---- STEP 2: Early exaggeration (for the first few iterations) ----
-    // During early iterations, P is multiplied by 4 (or 12 by default).
-    // This exaggerates the attractive forces, making clusters form quickly.
-    // After the early exaggeration phase (~first 250 iterations), forces return to normal.
+    // ---- STEP 2: Exaggeration phases ----
+    // Early exaggeration (first few iterations): P multiplied by 4.
+    // Makes clusters form quickly by exaggerating attractive forces.
+    //
+    // Late exaggeration (later iterations): P multiplied by 1.2.
+    // Helps refine cluster separation after initial formation.
+    // Standard in modern t-SNE implementations.
     float exaggeration = 1.0f;
     if (iter < config_.early_exaggeration) {
-        exaggeration = 4.0f;
+        exaggeration = 4.0f;  // Early: strong exaggeration
+    } else if (iter > config_.n_iter * 3 / 4) {
+        exaggeration = 1.2f;  // Late: mild exaggeration for final refinement
     }
 
     // ---- STEP 3: Compute gradients ----

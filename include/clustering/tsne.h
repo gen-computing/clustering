@@ -33,6 +33,10 @@ struct TSNEConfig {
 
     float min_gradient_norm = 1e-7f;  // Convergence threshold (stop if gradient
                                        // drops below this). Not always used.
+
+    int random_seed = -1;              // Random seed for reproducibility.
+                                       // -1 = use std::random_device (non-deterministic).
+                                       // >= 0 = fixed seed (reproducible results).
 };
 
 // ============================================================================
