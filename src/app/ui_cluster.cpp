@@ -42,7 +42,7 @@ void render_select_algorithm(AppState& g) {
         static const char* algos[] = {"KMeans", "MiniBatchKMeans", "OnlineKMeans", "DBSCAN"};
         static int prev_algo = 0;
 
-        ImGui::Combo("Algorithm", &g.selected_algo, algos, IM_ARRAYSIZE(algos));
+        ImGui::Combo("##algo_select", &g.selected_algo, algos, IM_ARRAYSIZE(algos));
 
         if (g.selected_algo != prev_algo && g.clustering_done) {
             g.clustering_done = false;

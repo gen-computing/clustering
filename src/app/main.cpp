@@ -125,7 +125,12 @@ int main() {
         if (active_tab == 0) {
             render_data_table(g);
         } else if (active_tab == 1) {
-            render_data_table(g);  // Show data table during dimred too
+            // Dimensionality Reduction: show viewport if we have reduced data, else data table
+            if (g.reduced_data.rows() > 0 || g.tsne_embedding.rows() > 0) {
+                render_viewport(g);
+            } else {
+                render_data_table(g);
+            }
         } else {
             render_viewport(g);
             render_compare_history(g, active_tab);

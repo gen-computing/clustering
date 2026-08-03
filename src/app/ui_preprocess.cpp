@@ -47,7 +47,7 @@ void render_import(AppState& g) {
                     if (!new_names.empty() && new_names.size() <= g.table.cols()) {
                         auto& cnames = g.table.column_names_mut();
                         for (size_t j = 0; j < g.table.cols(); ++j)
-                            cnames[j] = j < new_names.size() ? new_names[j] : "Col_" + std::to_string(j);
+                            cnames[j] = j < new_names.size() ? new_names[j] : std::string(1, 'A' + (char)j);
                         ImGui::CloseCurrentPopup();
                     }
                 }

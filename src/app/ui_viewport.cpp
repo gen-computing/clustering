@@ -22,26 +22,36 @@ void render_viewport(AppState& g) {
                 create_fbo(g, vp_w, vp_h);
             }
 
-            // Set data
-            if (!g.clustering_done) {
-                const Matrix X = g.use_pca && g.reduced_data.rows() > 0 ? g.reduced_data : g.table.data();
-                bool has_intermediate = false;
-                { std::lock_guard<std::mutex> lk(g.result_mutex);
-                  has_intermediate = g.centroids.rows() > 0 && g.labels.size() > 0; }
-                if (has_intermediate && g.realtime_viz) {
-                    std::lock_guard<std::mutex> lk(g.result_mutex);
-                    g.renderer_obj->set_data(X, g.labels, g.centroids);
-                    g.renderer_obj->set_metrics(0, g.n_iter);
-                } else {
-                    Vector neutral(X.rows()); neutral.fill(-1.0f);
-                    Matrix cnt(1, X.cols());
-                    g.renderer_obj->set_data(X, neutral, cnt);
-                    g.renderer_obj->set_metrics(0, 0);
+            // Set data - handle PCA/t-SNE reduced data
+            if (g.reduced_data.rows() > 0) {
+                // PCA reduced data
+                Vector neutral(g.reduced_data.rows()); neutral.fill(-1.0f);
+                Matrix cnt(1, g.reduced_data.cols());
+                g.renderer_obj->set_data(g.reduced_data, neutral, cnt);
+                g.renderer_obj->set_metrics(0, 0);
+            } else if (g.tsne_embedding.rows() > 0) {
+                // t-SNE embedding (2D, pad to 3D for rendering)
+                Matrix padded(g.tsne_embedding.rows(), 3);
+                for (size_t i = 0; i < g.tsne_embedding.rows(); ++i) {
+                    padded[i][0] = g.tsne_embedding[i][0];
+                    padded[i][1] = g.tsne_embedding[i][1];
+                    padded[i][2] = 0.0f;
                 }
+                Vector neutral(padded.rows()); neutral.fill(-1.0f);
+                Matrix cnt(1, 3);
+                g.renderer_obj->set_data(padded, neutral, cnt);
+                g.renderer_obj->set_metrics(0, 0);
+            } else if (!g.clustering_done) {
+                // No reduced data, show original with neutral labels
+                const Matrix& X = g.table.data();
+                Vector neutral(X.rows()); neutral.fill(-1.0f);
+                Matrix cnt(1, X.cols());
+                g.renderer_obj->set_data(X, neutral, cnt);
+                g.renderer_obj->set_metrics(0, 0);
             } else {
-                const Matrix X = g.use_pca && g.reduced_data.rows() > 0 ? g.reduced_data : g.table.data();
+                // Clustering done
                 { std::lock_guard<std::mutex> lk(g.result_mutex);
-                  g.renderer_obj->set_data(X, g.labels, g.centroids.rows() > 0 ? g.centroids : Matrix(1, X.cols()));
+                  g.renderer_obj->set_data(g.table.data(), g.labels, g.centroids.rows() > 0 ? g.centroids : Matrix(1, g.table.cols()));
                   g.renderer_obj->set_metrics(g.inertia, g.n_iter); }
             }
 
