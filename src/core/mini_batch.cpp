@@ -18,6 +18,7 @@
 // ============================================================================
 
 #include "clustering/mini_batch.h"
+#include "clustering/validate.h"
 #include <random>     // std::mt19937, std::uniform_int_distribution
 #include <algorithm>  // std::min
 
@@ -35,6 +36,8 @@ MiniBatchKMeans::~MiniBatchKMeans() = default;
 // ============================================================================
 
 void MiniBatchKMeans::partial_fit(const Matrix& X) {
+    validate_matrix(X);
+
     // First call: no centroids yet. Do full fit() to initialize.
     if (!fitted_) {
         fit(X);
@@ -78,6 +81,8 @@ void MiniBatchKMeans::partial_fit(const Matrix& X) {
 
     // ---- UPDATE CENTROIDS ----
     // For each sampled point, find nearest centroid and nudge toward it.
+    // Learning rate decays per POINT (not per batch) for proper convergence.
+    // Standard mini-batch KMeans (Sculley 2010): lr = 1/t where t = point count.
     for (size_t i = 0; i < actual_batch; ++i) {
         // Find nearest centroid for this sampled point
         size_t nearest = 0;
@@ -89,10 +94,11 @@ void MiniBatchKMeans::partial_fit(const Matrix& X) {
             }
         }
 
-        // Learning rate: decays with number of partial_fit calls.
-        // Early iterations: lr ≈ 1.0 (move a lot)
-        // Later iterations: lr → 0.01 (fine-tuning)
-        // This adaptive rate helps convergence without needing a complex schedule.
+        // Learning rate: decays with number of individual point assignments.
+        // lr = 1 / (n_updates + 1)
+        // First point: lr = 1.0 (large move)
+        // After 100 points: lr = 0.01 (fine-tuning)
+        // After 10000 points: lr = 0.0001 (converged)
         float lr = 1.0f / static_cast<float>(n_updates_ + 1);
 
         // Move centroid toward the point:
@@ -100,9 +106,9 @@ void MiniBatchKMeans::partial_fit(const Matrix& X) {
         for (size_t d = 0; d < X.cols(); ++d) {
             centroids_mut()[nearest][d] += lr * (X[indices[i]][d] - centroids()[nearest][d]);
         }
-    }
 
-    ++n_updates_;
+        ++n_updates_;  // Per point, not per batch
+    }
 }
 
 } // namespace clustering

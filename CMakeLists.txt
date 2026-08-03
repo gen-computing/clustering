@@ -82,6 +82,7 @@ endif()
 
 # Main library
 set(CLUSTERING_SOURCES
+    src/core/validate.cpp
     src/core/kmeans.cpp
     src/core/mini_batch.cpp
     src/core/online.cpp
@@ -111,6 +112,7 @@ add_library(clustering ${CLUSTERING_SOURCES})
 target_include_directories(clustering PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/extern/nanoflann
 )
 
 # Platform-specific linking

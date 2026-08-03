@@ -32,6 +32,7 @@
 // ============================================================================
 
 #include "clustering/pca.h"
+#include "clustering/validate.h"
 #include <Eigen/Dense>           // Core Eigen matrix types (MatrixXf, VectorXf)
 #include <Eigen/Eigenvalues>     // SelfAdjointEigenSolver for eigendecomposition
 #include <cmath>                 // std::max
@@ -69,21 +70,8 @@ PCA::PCA(size_t n_components)
 // ============================================================================
 
 void PCA::fit(const Matrix& X) {
-    // Input validation: same pattern as KMeans.
-    if (X.rows() == 0) throw std::runtime_error("Empty input matrix");
-    if (X.cols() == 0) throw std::runtime_error("No features");
-
-    // PCA needs at least 2 samples to compute covariance.
-    // With 1 sample, covariance is ill-defined (division by n-1 = 0).
-    if (X.rows() < 2) throw std::runtime_error("Need at least 2 samples");
-
-    // n_components must be positive.
-    if (n_components_ == 0) throw std::runtime_error("n_components must be > 0");
-
-    // Can't keep more components than the minimum dimension.
-    // Example: 100 samples, 5 features -> max components = 5.
-    if (n_components_ > std::min(X.rows(), X.cols()))
-        throw std::runtime_error("n_components exceeds min(rows, cols)");
+    validate_matrix(X);
+    validate_pca(X, n_components_);
 
     // Delegate to the raw pointer version (the actual implementation).
     fit_raw(X.data(), X.rows(), X.cols());
@@ -96,9 +84,8 @@ void PCA::fit(const Matrix& X) {
 // ============================================================================
 
 void PCA::fit_raw(const float* data, size_t n_rows, size_t n_cols) {
-    // Same validation as the Matrix version.
-    if (n_rows < 2) throw std::runtime_error("Need at least 2 samples");
-    if (n_cols == 0) throw std::runtime_error("No features");
+    if (n_rows < 2) throw std::runtime_error("PCA needs at least 2 samples");
+    if (n_cols == 0) throw std::runtime_error("Matrix has 0 features");
     if (n_components_ == 0) throw std::runtime_error("n_components must be > 0");
     if (n_components_ > std::min(n_rows, n_cols))
         throw std::runtime_error("n_components exceeds min(rows, cols)");
@@ -206,7 +193,7 @@ void PCA::fit_raw(const float* data, size_t n_rows, size_t n_cols) {
 // ============================================================================
 
 Matrix PCA::transform(const Matrix& X) const {
-    if (!fitted_) throw std::runtime_error("PCA not fitted");
+    validate_fitted(fitted_);
 
     // Feature count must match what we trained on.
     if (X.cols() != n_features_)
@@ -262,7 +249,7 @@ Matrix PCA::fit_transform(const Matrix& X) {
 // ============================================================================
 
 void PCA::transform_raw(const float* data, size_t n_rows, float* out) const {
-    if (!fitted_) throw std::runtime_error("PCA not fitted");
+    validate_fitted(fitted_);
 
     // Same logic as transform() but avoids Matrix copies.
     // Input data is at `data` pointer, output goes to `out` pointer.
@@ -308,7 +295,7 @@ void PCA::fit_transform_raw(const float* data, size_t n_rows, size_t n_cols, flo
 // ============================================================================
 
 void PCA::inverse_transform_raw(const float* data, size_t n_rows, float* out) const {
-    if (!fitted_) throw std::runtime_error("PCA not fitted");
+    validate_fitted(fitted_);
 
     // Map input (n_rows × k) to Eigen.
     Eigen::Map<const RowMajorMatrixXf> Yin(data, n_rows, n_components_);
@@ -343,7 +330,7 @@ void PCA::inverse_transform_raw(const float* data, size_t n_rows, float* out) co
 // ============================================================================
 
 Matrix PCA::inverse_transform(const Matrix& X) const {
-    if (!fitted_) throw std::runtime_error("PCA not fitted");
+    validate_fitted(fitted_);
 
     // Input must have the right number of columns (n_components).
     if (X.cols() != n_components_)
@@ -363,7 +350,7 @@ Matrix PCA::inverse_transform(const Matrix& X) const {
 // ============================================================================
 
 float PCA::total_explained_variance_ratio() const {
-    if (!fitted_) throw std::runtime_error("PCA not fitted");
+    validate_fitted(fitted_);
     float total = 0.0f;
     for (size_t i = 0; i < n_components_; ++i) total += explained_variance_ratio_[i];
     return total;

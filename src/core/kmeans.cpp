@@ -20,6 +20,7 @@
 #include "clustering/kmeans.h"
 #include "clustering/distance.h"     // For AVX2 distance functions
 #include "clustering/thread_pool.h"  // For parallel distance computation
+#include "clustering/validate.h"     // For shared input validation
 #include "clustering/logging.h"
 #include <algorithm>                 // For std::min, std::abs, std::fill
 #include <random>                    // For std::mt19937 (Mersenne Twister random engine)
@@ -57,40 +58,10 @@ KMeans::~KMeans() = default;
 
 void KMeans::fit(const Matrix& X) {
     // ----- INPUT VALIDATION -----
-    // Always check inputs before doing expensive computation.
-    // Throwing early saves time and gives clear error messages.
+    validate_matrix(X);
+    validate_k(config_.k, X.rows());
 
     LOG_INFO("KMeans::fit starting: n=%zu x d=%zu, k=%zu, threads=%zu", X.rows(), X.cols(), config_.k, config_.max_threads);
-
-    // Check: is the matrix empty (0 rows)?
-    // An empty matrix means there's no data to learn from.
-    if (X.rows() == 0) {
-        throw std::runtime_error("Empty input matrix");
-    }
-
-    // Check: are there any features (columns)?
-    // Without features, every point is the same -- can't cluster.
-    if (X.cols() == 0) {
-        throw std::runtime_error("No features in input");
-    }
-
-    // Check: is k (number of clusters) valid?
-    // k=0 means "find 0 clusters" which makes no sense.
-    if (config_.k == 0) {
-        throw std::runtime_error("k must be greater than 0");
-    }
-
-    // Check: do we have enough points for the number of clusters?
-    // Can't assign 10 clusters to 5 points (at least 5 would be empty).
-    if (config_.k > X.rows()) {
-        throw std::runtime_error("k exceeds number of data points");
-    }
-
-    // Check: NaN in data → poison distances → infinite loop
-    for (size_t i = 0; i < X.rows(); ++i)
-        for (size_t j = 0; j < X.cols(); ++j)
-            if (std::isnan(X[i][j]))
-                throw std::runtime_error("NaN in input data — drop non-numeric columns first");
 
     // ----- INITIALIZATION -----
 
@@ -159,11 +130,7 @@ void KMeans::fit(const Matrix& X) {
 // ============================================================================
 
 Vector KMeans::predict(const Matrix& X) const {
-    // Guard: can't predict with an untrained model.
-    // The centroids are meaningless until fit() has been called.
-    if (!fitted_) {
-        throw std::runtime_error("Model not fitted");
-    }
+    validate_fitted(fitted_);
 
     // Create output: one label per input point.
     Vector labels(X.rows());

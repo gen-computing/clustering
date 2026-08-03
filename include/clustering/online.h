@@ -20,16 +20,12 @@ struct OnlineConfig {
                                         // N data points. Old points are forgotten.
                                         // This makes the model adapt to changing data.
                                         // Set to 0 for NO window (remembers everything).
-                                        // Example: window_size=100 means only last 100
-                                        //          points influence the centroids.
 
     float forgetting_factor = 0.99f;   // FORGETTING FACTOR: How quickly old data
                                         // loses influence. Range: [0.0, 1.0].
                                         // 1.0 = never forget (all points equal weight)
                                         // 0.9 = recent points matter MUCH more
                                         // 0.0 = completely forget everything (useless)
-                                        // Applied as: count *= factor each update.
-                                        // Practical: 0.95-0.99 works well for most cases.
 
     bool auto_retrain = true;           // AUTO-RETRAIN: If drift is detected, should
                                         // the model automatically do a full retrain
@@ -42,6 +38,10 @@ struct OnlineConfig {
 
     size_t retrain_interval = 1000;     // Check for drift every N points.
                                         // Checking every point would be too slow.
+
+    // Iteration callback: called after each partial_fit batch.
+    // Same signature as KMeansConfig::iter_callback.
+    std::function<bool(size_t, const Matrix&, const Vector&)> iter_callback;
 };
 
 // ============================================================================

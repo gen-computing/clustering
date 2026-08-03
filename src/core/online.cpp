@@ -21,6 +21,7 @@
 
 #include "clustering/online.h"
 #include "clustering/distance.h"
+#include "clustering/validate.h"
 #include <algorithm>   // std::min
 #include <cmath>       // std::sqrt
 #include <stdexcept>   // std::runtime_error
@@ -48,6 +49,11 @@ OnlineKMeans::OnlineKMeans(const OnlineConfig& config)
     // Configure drift detector from the user's settings.
     drift_detector_.set_threshold(config.drift_threshold);
     drift_detector_.set_window_size(config.window_size);
+
+    // Pass iteration callback to base class for real-time visualization
+    if (config.iter_callback) {
+        config_.iter_callback = config.iter_callback;
+    }
 }
 
 OnlineKMeans::~OnlineKMeans() = default;
@@ -57,9 +63,7 @@ OnlineKMeans::~OnlineKMeans() = default;
 // ============================================================================
 
 void OnlineKMeans::partial_fit(const Matrix& X) {
-    // Validate input: same checks as KMeans.
-    if (X.rows() == 0) throw std::runtime_error("Empty input matrix");
-    if (X.cols() == 0) throw std::runtime_error("No features");
+    validate_matrix(X);
 
     // First call: not yet trained. Do full fit() to initialize centroids.
     // After fitting, record which cluster each initial point went to.
@@ -93,12 +97,8 @@ void OnlineKMeans::partial_fit(const Matrix& X) {
 // ============================================================================
 
 void OnlineKMeans::partial_fit_point(const float* point, size_t dim) {
-    // Guard: can't update a model that hasn't been initialized.
-    if (!fitted_) throw std::runtime_error("Model not fitted");
-
-    // Guard: the incoming point must have the same number of features as the centroids.
-    // Otherwise we'd be comparing points in different spaces (meaningless).
-    if (dim != centroids().cols()) throw std::runtime_error("Dimension mismatch");
+    validate_fitted(fitted_);
+    validate_dimensions(centroids().cols(), dim);
 
     // ---- PATH 1: Sliding window enabled ----
     // Add point to the window buffer. If window is full, remove oldest point.
@@ -321,11 +321,7 @@ void OnlineKMeans::set_window_size(size_t size) {
 }
 
 void OnlineKMeans::set_forgetting_factor(float factor) {
-    // Validate: factor must be between 0.0 and 1.0 (inclusive).
-    // 0.0 = forget everything immediately (useless).
-    // 1.0 = never forget (all points equal weight).
-    if (factor < 0.0f || factor > 1.0f)
-        throw std::runtime_error("Forgetting factor must be in [0, 1]");
+    validate_forgetting_factor(factor);
     online_config_.forgetting_factor = factor;
 }
 

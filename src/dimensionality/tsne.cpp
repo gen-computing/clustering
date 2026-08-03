@@ -19,6 +19,7 @@
 
 #include "clustering/tsne.h"
 #include "clustering/distance.h"
+#include "clustering/validate.h"
 #include <cmath>       // std::sqrt, std::log, std::exp, std::abs
 #include <algorithm>   // std::min, std::max
 #include <numeric>     // std::accumulate (for sums)
@@ -39,10 +40,8 @@ TSNE::TSNE(const TSNEConfig& config)
 // ============================================================================
 
 void TSNE::fit(const Matrix& X) {
-    // Input validation.
-    if (X.rows() == 0) throw std::runtime_error("Empty input matrix");
-    if (X.cols() == 0) throw std::runtime_error("No features");
-    if (X.rows() < 2) throw std::runtime_error("Need at least 2 samples");
+    validate_matrix(X);
+    validate_tsne(X, config_.perplexity);
 
     n_samples_ = X.rows();
     n_features_ = X.cols();
@@ -422,7 +421,7 @@ float TSNE::compute_kl_divergence() const {
 // ============================================================================
 
 Matrix TSNE::transform(const Matrix& X) const {
-    if (!fitted_) throw std::runtime_error("t-SNE not fitted");
+    validate_fitted(fitted_);
 
     size_t n = X.rows();
     size_t nd = config_.n_components;

@@ -50,6 +50,9 @@ struct AppState {
     int batch_size = 100;
     int window_size = 1000;
     float forgetting_factor = 0.99f;
+    bool online_auto_retrain = false;
+    float drift_threshold = 0.1f;
+    int retrain_interval = 1000;
 
     // DBSCAN params
     float dbscan_eps = 0.5f;
@@ -211,8 +214,30 @@ static void run_clustering_async() {
             loc_inertia = km->inertia(); loc_iter = (int)km->n_iter();
             g.kmeans = km; loc_k = g.k;
         } else if (selected == 2) {
-            OnlineConfig cfg; cfg.k = g.k; cfg.window_size = (size_t)g.window_size;
-            cfg.forgetting_factor = g.forgetting_factor; cfg.auto_retrain = false;
+            OnlineConfig cfg;
+            cfg.k = g.k;
+            cfg.window_size = (size_t)g.window_size;
+            cfg.forgetting_factor = g.forgetting_factor;
+            cfg.auto_retrain = g.online_auto_retrain;
+            cfg.drift_threshold = g.drift_threshold;
+            cfg.retrain_interval = (size_t)g.retrain_interval;
+
+            // Add batch-level animation if realtime viz enabled
+            if (g.realtime_viz) {
+                cfg.iter_callback = [](size_t iter, const Matrix& centroids, const Vector& labels) -> bool {
+                    {
+                        std::lock_guard<std::mutex> lk(g.result_mutex);
+                        g.centroids = centroids;
+                        g.labels = labels;
+                        g.n_iter = (int)iter;
+                    }
+                    g.status_text = "OnlineKMeans update " + std::to_string(iter);
+                    g.status_time = 999.0f;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    return false;
+                };
+            }
+
             auto* km = new OnlineKMeans(cfg); km->fit(X);
             loc_labels = km->labels(); loc_centroids = km->centroids();
             loc_inertia = km->inertia(); loc_iter = (int)km->n_iter();
@@ -1022,7 +1047,15 @@ int main() {
                 } else {
                     ImGui::SliderInt("Clusters", &g.k, 1, std::min(50, (int)g.table.rows()-1));
                     if (g.selected_algo==1) ImGui::SliderInt("Batch Size", &g.batch_size, 10, 1000);
-                    if (g.selected_algo==2){ImGui::SliderInt("Window", &g.window_size, 100, 10000); ImGui::SliderFloat("Forget", &g.forgetting_factor, 0.8f, 1.0f);}
+                    if (g.selected_algo==2) {
+                        ImGui::SliderInt("Window", &g.window_size, 100, 10000);
+                        ImGui::SliderFloat("Forget", &g.forgetting_factor, 0.8f, 1.0f);
+                        ImGui::Checkbox("Auto Retrain on Drift", &g.online_auto_retrain);
+                        if (g.online_auto_retrain) {
+                            ImGui::SliderFloat("Drift Threshold", &g.drift_threshold, 0.01f, 0.5f);
+                            ImGui::SliderInt("Check Interval", &g.retrain_interval, 100, 5000);
+                        }
+                    }
                 }
                 ImGui::Checkbox("PCA pre-reduce", &g.use_pca);
                 if (g.use_pca) {
@@ -1246,16 +1279,33 @@ int main() {
         static const char* algo_names[] = {"KMeans","MiniBatch","Online","DBSCAN"};
 
         if (g.clustering_running) {
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "%s  k=%d  %s",
-                algo_names[g.selected_algo], g.k, g.use_pca ? "PCA" : "raw");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "|  Iter: %d  |  Running...", g.n_iter);
+            if (g.selected_algo == 2) {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Online  k=%d  W=%d  F=%.2f",
+                    g.k, g.window_size, g.forgetting_factor);
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "|  Iter: %d  |  Running...", g.n_iter);
+            } else {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "%s  k=%d  %s",
+                    algo_names[g.selected_algo], g.k, g.use_pca ? "PCA" : "raw");
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "|  Iter: %d  |  Running...", g.n_iter);
+            }
         } else if (g.clustering_done) {
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "%s  k=%d", algo_names[g.selected_algo], g.k);
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                "|  Inertia: %.2f  Iter: %d  Sil: %.4f  DB: %.4f",
-                g.inertia, g.n_iter, g.current_silhouette, g.current_db);
+            if (g.selected_algo == 2) {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "Online  k=%d  W=%d  F=%.2f  %s",
+                    g.k, g.window_size, g.forgetting_factor,
+                    g.online_auto_retrain ? "Auto-Retrain" : "Manual");
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                    "|  Inertia: %.2f  Iter: %d  Sil: %.4f  DB: %.4f",
+                    g.inertia, g.n_iter, g.current_silhouette, g.current_db);
+            } else {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1.0f, 1.0f), "%s  k=%d", algo_names[g.selected_algo], g.k);
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                    "|  Inertia: %.2f  Iter: %d  Sil: %.4f  DB: %.4f",
+                    g.inertia, g.n_iter, g.current_silhouette, g.current_db);
+            }
         } else if (!g.status_text.empty()) {
             ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "%s", g.status_text.c_str());
             g.status_time -= ImGui::GetIO().DeltaTime;
