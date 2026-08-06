@@ -9,10 +9,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Options
 # ==============================================================================
 option(BUILD_EXAMPLES    "Build example executables"           ON)
-option(BUILD_BENCHMARK   "Build benchmark executable"          ON)
 option(BUILD_GUI         "Build interactive GUI"               ON)
 option(BUILD_TESTS       "Build test suite"                    ON)
-option(BUILD_PYTHON      "Build Python bindings"               OFF)
 option(CLUSTERING_DEBUG  "Enable debug logging"                OFF)
 
 # ==============================================================================
@@ -188,19 +186,6 @@ if(BUILD_EXAMPLES)
 endif()
 
 # ==============================================================================
-# Benchmark
-# ==============================================================================
-if(BUILD_BENCHMARK)
-    add_executable(benchmark_exe benchmarks/benchmark.cpp)
-    target_link_libraries(benchmark_exe clustering)
-    set_target_properties(benchmark_exe PROPERTIES OUTPUT_NAME "benchmark")
-
-    add_executable(stress_bench benchmarks/stress_bench.cpp)
-    target_link_libraries(stress_bench clustering)
-    set_target_properties(stress_bench PROPERTIES OUTPUT_NAME "stress_bench")
-endif()
-
-# ==============================================================================
 # Tests
 # ==============================================================================
 if(BUILD_TESTS AND GTest_FOUND)
@@ -249,17 +234,4 @@ endif()
 if(TARGET streaming)
     install(TARGETS streaming RUNTIME DESTINATION bin)
 endif()
-if(TARGET benchmark_exe)
-    install(TARGETS benchmark_exe RUNTIME DESTINATION bin)
-endif()
 
-# ==============================================================================
-# Python bindings
-# ==============================================================================
-if(BUILD_PYTHON)
-    find_package(pybind11 REQUIRED)
-    pybind11_add_module(_clustering python/bindings.cpp)
-    target_link_libraries(_clustering PRIVATE clustering)
-    target_include_directories(_clustering PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-    install(TARGETS _clustering LIBRARY DESTINATION clustering)
-endif()

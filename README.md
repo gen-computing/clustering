@@ -7,7 +7,7 @@
 [![C++20](https://img.shields.io/badge/C++-20-blue?logo=cplusplus)](https://isocpp.org/)
 [![AVX2 SIMD](https://img.shields.io/badge/SIMD-AVX2-brightgreen)]()
 [![OpenGL 3.3](https://img.shields.io/badge/OpenGL-3.3-red)]()
-[![Tests](https://img.shields.io/badge/Tests-79%20Passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-120%20Passing-brightgreen)]()
 [![License](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 
 <p align="center">
@@ -138,33 +138,10 @@ cmake --build . --config Release
 ### Run
 
 ```bash
-./tests              # 79 tests
+./tests              # 120 tests
 ./imgui_bench        # Interactive GUI
 ./basic              # Console demo
 ./basic --viz        # With OpenGL visualization
-./benchmark          # Performance comparison
-```
-
-### Python
-
-```bash
-cmake .. -DBUILD_PYTHON=ON -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-cp _clustering*.so ../python/clustering/
-```
-
-```python
-from clustering import KMeans, PCA, OnlineKMeans
-import numpy as np
-
-X = np.random.randn(10000, 50).astype(np.float32)
-
-km = KMeans(k=5)
-km.fit(X)
-labels, centroids = km.labels, km.centroids
-
-pca = PCA(n_components=2)
-Y = pca.fit_transform(X)
 ```
 
 ---
@@ -385,11 +362,9 @@ clustering/
 │   ├── gui/                # DataTable, ColumnStats, CSVImporter, Pipeline
 │   └── app/                # ImGui desktop application
 ├── extern/                 # Dear ImGui, tinyfiledialogs
-├── tests/                  # 79 GTest tests
+├── tests/                  # GTest tests
 ├── examples/               # Demo executables
-├── benchmarks/             # C++ and Python benchmarks
-├── data/                   # Sample datasets (iris, wine, synthetic)
-├── python/                 # pybind11 bindings
+├── benchmarks/data/        # Sample datasets (iris, wine, synthetic)
 └── CMakeLists.txt
 ```
 
@@ -402,40 +377,27 @@ cd build && ./tests
 ```
 
 ```
-[==========] 79 tests from 19 test suites ran.
-[  PASSED  ] 79 tests.
+[==========] 120 tests from 25 test suites ran.
+[  PASSED  ] 120 tests.
 ```
 
 ### Coverage
 
 | Module | Tests | Status |
 |:-------|:------|:-------|
-| KMeans | 5 | All pass |
+| KMeans | 8 | All pass |
 | Threading | 7 | All pass |
 | Operations | 5 | All pass |
 | Comprehensive | 34 | All pass |
 | Matrix | 5 | All pass |
-| DBSCAN | 7 | All pass |
+| DBSCAN | 15 | All pass |
 | Evaluation | 5 | All pass |
-| **Total** | **79** | **All pass** |
+| Drops/Exports | 12 | All pass |
+| Real data (golden) | 29 | All pass |
+| **Total** | **120** | **All pass** |
 
 ---
 
-## Benchmarks
-
-### Reproduce
-
-```bash
-./benchmark                    # C++ benchmarks
-python3 benchmarks/sklearn_benchmark.py  # vs sklearn
-```
-
-### System
-
-- CPU: Intel i7 13th Gen (8 cores / 16 threads)
-- RAM: 32GB DDR5
-- Compiler: GCC `-O3 -mavx2 -mfma`
-- Python: 3.12 with scikit-learn 1.9.0
 
 ---
 
