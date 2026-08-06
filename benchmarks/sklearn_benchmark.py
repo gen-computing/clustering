@@ -1,6 +1,8 @@
 import numpy as np
 import time
-from sklearn.cluster import KMeans, MiniBatchKMeans
+import json
+import sys
+from sklearn.cluster import KMeans, MiniBatchKMeans, DBSCAN
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
@@ -126,5 +128,47 @@ def run_benchmarks():
 
     return all_results
 
-if __name__ == "__main__":
+def golden_reference():
+    """Compute deterministic reference values used by tests/test_real_data.cpp."""
+    data_dir = "benchmarks/data/"
+    out = {}
+    for name, path, k in [("iris", data_dir + "iris.csv", 3),
+                          ("wine", data_dir + "wine.csv", 3),
+                          ("synthetic_10k", data_dir + "synthetic_10k_32d.csv", 10)]:
+        X = load_csv(path)
+        km = KMeans(n_clusters=k, n_init=10, random_state=42)
+        km.fit(X)
+        sizes = sorted(np.bincount(km.labels_).astype(int).tolist())
+        db = DBSCAN(eps=0.5, min_samples=5)
+        db.fit(X)
+        n_noise = int((db.labels_ == -1).sum())
+        n_clusters = len(set(db.labels_)) - (1 if n_noise else 0)
+        db_sizes = sorted(np.bincount(db.labels_[db.labels_ != -1]).astype(int).tolist())
+        pca = PCA(n_components=2, random_state=42)
+        pca.fit_transform(X)
+        out[name] = {
+            "k": k,
+            "kmeans_inertia": float(km.inertia_),
+            "cluster_sizes": sizes,
+            "dbscan_eps": 0.5,
+            "dbscan_min_samples": 5,
+            "dbscan_n_clusters": int(n_clusters),
+            "dbscan_n_noise": int(n_noise),
+            "dbscan_cluster_sizes": db_sizes,
+            "pca2_variance": float(sum(pca.explained_variance_ratio_) * 100),
+        }
+        print(f"golden {name}: inertia={out[name]['kmeans_inertia']:.2f} "
+              f"sizes={sizes} dbscan=({n_clusters} clusters, {n_noise} noise) "
+              f"pca2={out[name]['pca2_variance']:.2f}%")
+    with open(data_dir + "golden.json", "w") as f:
+        json.dump(out, f, indent=2)
+    print("wrote benchmarks/data/golden.json")
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--golden":
+        golden_reference()
+        return
     run_benchmarks()
+
+if __name__ == "__main__":
+    main()

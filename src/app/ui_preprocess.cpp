@@ -11,9 +11,13 @@ namespace clustering_app {
 static char col_names_buf[4096] = {};
 static char rename_buf[128] = {};
 static int remove_row_idx = 0;
+static int remove_col_idx = 0;
 
 void render_import(AppState& g) {
-    if (ImGui::CollapsingHeader("Import", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (g_font_header) ImGui::PushFont(g_font_header);
+    bool _open1 = ImGui::CollapsingHeader("Import", ImGuiTreeNodeFlags_DefaultOpen);
+    if (g_font_header) ImGui::PopFont();
+    if (_open1) {
         ImGui::Checkbox("Header row", &g.has_header);
         if (ImGui::Button("Open CSV File", ImVec2(-1, 30))) open_csv(g);
         if (g.data_loaded) {
@@ -60,7 +64,10 @@ void render_import(AppState& g) {
 }
 
 void render_column_stats(AppState& g) {
-    if (ImGui::CollapsingHeader("Column Stats", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (g_font_header) ImGui::PushFont(g_font_header);
+    bool _open2 = ImGui::CollapsingHeader("Column Stats", ImGuiTreeNodeFlags_DefaultOpen);
+    if (g_font_header) ImGui::PopFont();
+    if (_open2) {
         if (g.data_loaded && g.table.cols() > 0) {
             size_t ncols = g.table.cols();
             if (g.selected_col >= (int)ncols) g.selected_col = 0;
@@ -68,7 +75,9 @@ void render_column_stats(AppState& g) {
             for (size_t j = 0; j < ncols; ++j) { if (j > 0) preview += '\0'; preview += g.table.column_names()[j]; }
             ImGui::Combo("Column", &g.selected_col, preview.c_str());
             size_t col = (size_t)g.selected_col;
-            const ColumnStats& s = g.stats.get(col);
+            const ColumnStats* sp = g.stats.get(col);
+            if (!sp) return;
+            const ColumnStats& s = *sp;
             ImGui::Text("Count:   %zu", s.count);
             ImGui::Text("Missing: %zu (%.1f%%)", s.missing_count, s.count > 0 ? 100.0f * s.missing_count / s.count : 0.0f);
             ImGui::Text("Mean:    %.4f", s.mean);
@@ -105,7 +114,10 @@ void render_column_stats(AppState& g) {
 }
 
 void render_preprocessing(AppState& g) {
-    if (ImGui::CollapsingHeader("Preprocessing")) {
+    if (g_font_header) ImGui::PushFont(g_font_header);
+    bool _open_pre = ImGui::CollapsingHeader("Preprocessing");
+    if (g_font_header) ImGui::PopFont();
+    if (_open_pre) {
         if (g.data_loaded) {
             static const char* ops[] = {"Normalize", "Standardize", "MinMax Scale", "Log Transform", "Clip Outliers"};
             ImGui::Combo("Operation", &g.preprocess_op, ops, IM_ARRAYSIZE(ops));
@@ -132,7 +144,7 @@ void render_preprocessing(AppState& g) {
             ImGui::Separator();
             ImGui::Text("Data Operations:");
             if (ImGui::Button("Drop Rows with Missing", ImVec2(-1, 0))) {
-                g.table.drop_rows_with_missing();
+                g.table.pipeline().drop_rows_with_missing();
                 g.stats.invalidate();
                 g.clustering_done = false;
             }
@@ -141,7 +153,17 @@ void render_preprocessing(AppState& g) {
             ImGui::SameLine();
             if (ImGui::Button("Remove Row", ImVec2(-1, 0))) {
                 if (remove_row_idx >= 0 && (size_t)remove_row_idx < g.table.rows()) {
-                    g.table.remove_row((size_t)remove_row_idx);
+                    g.table.pipeline().drop_row((size_t)remove_row_idx);
+                    g.stats.invalidate();
+                    g.clustering_done = false;
+                }
+            }
+            ImGui::SetNextItemWidth(80);
+            ImGui::InputInt("Column #", &remove_col_idx, 0, 0);
+            ImGui::SameLine();
+            if (ImGui::Button("Remove Column", ImVec2(-1, 0))) {
+                if (remove_col_idx >= 0 && (size_t)remove_col_idx < g.table.cols()) {
+                    g.table.pipeline().drop_column((size_t)remove_col_idx);
                     g.stats.invalidate();
                     g.clustering_done = false;
                 }

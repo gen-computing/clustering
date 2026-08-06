@@ -40,6 +40,10 @@ using clustering::RendererConfig;
 using clustering::TSNE;
 using clustering::TSNEConfig;
 
+// Large fonts loaded in main.cpp (DejaVu Sans). Null until loaded.
+extern ImFont* g_font_big;      // 18 px — dropdowns, buttons, labels
+extern ImFont* g_font_header;   // 26 px — section headers, tab bar
+
 // ============================================================================
 // AppState — All global state for the interactive clustering tool.
 // ============================================================================
@@ -58,6 +62,9 @@ struct AppState {
     KMeans* kmeans = nullptr;
     DBSCAN* dbscan_obj = nullptr;
     int selected_algo = 0;
+    // Which data clustering consumes: 0 = original (preprocessed), 1 = PCA, 2 = t-SNE.
+    int cluster_source = 0;
+    bool drift_detected = false;
     int k = 5;
     int max_iter = 300;
     float tol = 1e-4f;
@@ -75,12 +82,13 @@ struct AppState {
 
     // --- DBSCAN sweep ---
     float eval_eps_min = 0.1f;
-    float eval_eps_max = 10.0f;
+    float eval_eps_max = 2.0f;
     int eval_eps_steps = 10;
 
     // --- Clustering state ---
     bool realtime_viz = true;
     std::atomic<bool> clustering_running{false};
+    std::atomic<bool> cancel_requested{false};
     bool clustering_done = false;
     float inertia = 0;
     int n_iter = 0;
@@ -96,7 +104,7 @@ struct AppState {
     int eval_min_k = 2;
     int eval_max_k = 15;
     int eval_best_k = 0;
-    bool eval_running = false;
+    std::atomic<bool> eval_running{false};
     std::thread eval_thread;
     std::thread cluster_thread;
     std::atomic<int> eval_progress_k{0};
@@ -135,6 +143,8 @@ struct AppState {
     int tsne_seed = -1;
     Matrix tsne_embedding;
     bool tsne_done = false;
+    std::atomic<bool> tsne_running{false};
+    std::thread tsne_thread;
 
     // --- Viewport ---
     unsigned int fbo = 0;
@@ -158,8 +168,9 @@ struct AppState {
     bool apply_to_all_columns = true;
 
     // --- Status ---
-    std::string status_text;
-    float status_time = 0;
+    mutable std::string status_text;
+    mutable float status_time = 0;
+    mutable std::mutex status_mutex;   // Guards status_text/status_time (worker threads write)
 };
 
 // ============================================================================
@@ -203,7 +214,23 @@ void render_viewport(AppState& g);
 void render_compare_history(AppState& g, int active_tab);
 
 // Status bar
-void render_status_bar(AppState& g);
+void render_status_bar(AppState& g, int active_tab);
+
+// ============================================================================
+// Shared UI helpers
+// ============================================================================
+
+// Mutex-safe status message (workers write, UI reads under lock).
+void set_status(const AppState& g, const std::string& msg, float seconds);
+
+// Big section header (26 px) with separator.
+void render_section_header(const char* title);
+
+// Run t-SNE on a worker thread (was blocking the UI thread).
+void run_tsne_async(AppState& g);
+
+// Clear both PCA and t-SNE results (Reset button in DimRed tab).
+void reset_dimred(AppState& g);
 
 // ============================================================================
 // Action Functions — business logic triggered by UI.

@@ -1,3 +1,4 @@
+#include "clustering/pca.h"
 #include <gtest/gtest.h>
 #include "clustering/versioning.h"
 #include "clustering/drift.h"
@@ -192,4 +193,72 @@ TEST_F(OperationsTest, PreprocessCache) {
     // Results should be identical
     EXPECT_EQ(result1.rows(), result2.rows());
     EXPECT_EQ(result1.cols(), result2.cols());
+}
+
+// ============================================================================
+// Drift detection must FIRE when clusters actually degrade (test gap).
+// ============================================================================
+
+TEST(DriftDetectorTest, DetectsRealDrift) {
+    DriftDetector detector;
+    detector.set_threshold(0.05f);
+    detector.set_window_size(4);
+
+    Matrix X(60, 2);
+    Vector labels(60);
+    Matrix centroids(2, 2);
+    centroids[0][0] = 0.0f; centroids[0][1] = 0.0f;
+    centroids[1][0] = 20.0f; centroids[1][1] = 20.0f;
+
+    // Rounds 0-3: tight, well-separated clusters (no drift).
+    for (size_t round = 0; round < 4; ++round) {
+        for (size_t i = 0; i < 60; ++i) {
+            size_t half = i / 30;
+            float base = half ? 20.0f : 0.0f;
+            X[i][0] = base + 0.01f * float(i % 30);
+            X[i][1] = base + 0.01f * float((i * 3) % 30);
+            labels[i] = float(half);
+        }
+        EXPECT_FALSE(detector.check(X, labels, centroids).drift_detected);
+    }
+
+    // Rounds 4-8: clusters dissolve into a uniform blob (drift).
+    bool fired = false;
+    for (size_t round = 0; round < 5 && !fired; ++round) {
+        for (size_t i = 0; i < 60; ++i) {
+            X[i][0] = float((i * 7 + round * 13) % 25);  // uniform scatter 0..25
+            X[i][1] = float((i * 11 + round * 5) % 25);
+            labels[i] = float(i / 30);  // stale labels from old structure
+        }
+        fired = detector.check(X, labels, centroids).drift_detected;
+    }
+    EXPECT_TRUE(fired) << "drift must be detected after clusters dissolve";
+}
+
+// ============================================================================
+// PCA high-dimension edge: >32 features (AVX2 paths) must stay sane.
+// ============================================================================
+
+TEST(PCA, HighDimension64) {
+    // 64 features, clear low-rank structure (3 underlying directions).
+    Matrix X(200, 64);
+    for (size_t i = 0; i < 200; ++i) {
+        for (size_t j = 0; j < 64; ++j) {
+            float base = (j % 3 == 0) ? float(i % 7) * 2.0f
+                     : (j % 3 == 1) ? float((i * 3) % 5) * 3.0f
+                     : float((i * 11) % 9) * 1.5f;
+            X[i][j] = base + 0.001f * float(j);
+        }
+    }
+    PCA pca(5);
+    pca.fit(X);
+    ASSERT_EQ(pca.n_components(), 5u);
+    // Ratio vector sums to ~1 and all entries in [0,1].
+    double total = 0.0;
+    for (size_t j = 0; j < 5; ++j) {
+        EXPECT_GE(pca.explained_variance_ratio()[j], 0.0f);
+        EXPECT_LE(pca.explained_variance_ratio()[j], 1.0f);
+        total += pca.explained_variance_ratio()[j];
+    }
+    EXPECT_NEAR(total, 1.0, 1e-3);
 }

@@ -22,37 +22,69 @@ void render_viewport(AppState& g) {
                 create_fbo(g, vp_w, vp_h);
             }
 
-            // Set data - handle PCA/t-SNE reduced data
-            if (g.reduced_data.rows() > 0) {
-                // PCA reduced data
-                Vector neutral(g.reduced_data.rows()); neutral.fill(-1.0f);
-                Matrix cnt(1, g.reduced_data.cols());
-                g.renderer_obj->set_data(g.reduced_data, neutral, cnt);
-                g.renderer_obj->set_metrics(0, 0);
-            } else if (g.tsne_embedding.rows() > 0) {
-                // t-SNE embedding (2D, pad to 3D for rendering)
-                Matrix padded(g.tsne_embedding.rows(), 3);
+            // Set data. Displays the SAME source clustering consumes
+            // (cluster_source), so labels always align with the points.
+            // Source 0 additionally honors the selected-columns mask so the
+            // plot replots whenever the selection changes.
+            Matrix padded;
+            Matrix selected_disp;
+            const Matrix* disp = nullptr;
+            size_t disp_rows = 0;
+            if (g.cluster_source == 2 && g.tsne_done && g.tsne_embedding.rows() > 0) {
+                padded.resize(g.tsne_embedding.rows(), 3);
                 for (size_t i = 0; i < g.tsne_embedding.rows(); ++i) {
                     padded[i][0] = g.tsne_embedding[i][0];
                     padded[i][1] = g.tsne_embedding[i][1];
                     padded[i][2] = 0.0f;
                 }
-                Vector neutral(padded.rows()); neutral.fill(-1.0f);
-                Matrix cnt(1, 3);
-                g.renderer_obj->set_data(padded, neutral, cnt);
-                g.renderer_obj->set_metrics(0, 0);
-            } else if (!g.clustering_done) {
-                // No reduced data, show original with neutral labels
-                const Matrix& X = g.table.data();
-                Vector neutral(X.rows()); neutral.fill(-1.0f);
-                Matrix cnt(1, X.cols());
-                g.renderer_obj->set_data(X, neutral, cnt);
-                g.renderer_obj->set_metrics(0, 0);
+                disp = &padded;
+                disp_rows = g.tsne_embedding.rows();
+            } else if (g.cluster_source == 1 && g.reduced_data.rows() > 0) {
+                disp = &g.reduced_data;
+                disp_rows = g.reduced_data.rows();
             } else {
-                // Clustering done
+                selected_disp = extract_selected_cols(g.table.data(), g.selected_cols);
+                if (selected_disp.cols() == 1) {
+                    // Renderer reads [i][0..1]; pad single-column selection.
+                    Matrix pad(selected_disp.rows(), 2);
+                    for (size_t i = 0; i < selected_disp.rows(); ++i) {
+                        pad[i][0] = selected_disp[i][0];
+                        pad[i][1] = 0.0f;
+                    }
+                    selected_disp = std::move(pad);
+                }
+                disp = &selected_disp;
+                disp_rows = selected_disp.rows();
+            }
+
+            Vector show_labels;
+            Matrix show_centroids;
+            bool labels_valid = g.clustering_done && g.labels.size() == disp_rows;
+            if (labels_valid) {
                 { std::lock_guard<std::mutex> lk(g.result_mutex);
-                  g.renderer_obj->set_data(g.table.data(), g.labels, g.centroids.rows() > 0 ? g.centroids : Matrix(1, g.table.cols()));
-                  g.renderer_obj->set_metrics(g.inertia, g.n_iter); }
+                    show_labels = g.labels;
+                    show_centroids = g.centroids; }
+                if (g.cluster_source == 0 && show_centroids.rows() > 0 &&
+                    show_centroids.cols() != disp->cols()) {
+                    // Clustering ran on more columns than currently selected:
+                    // project centroids into the displayed subspace too.
+                    show_centroids = extract_selected_cols(show_centroids, g.selected_cols);
+                }
+                if (g.selected_algo == 3) {
+                    // DBSCAN: label 0 = noise. Renderer colors label >= 0, so
+                    // map noise to -1 (gray); clusters 1..k keep their colors.
+                    for (size_t i = 0; i < show_labels.size(); ++i)
+                        if (show_labels[i] < 1.0f) show_labels[i] = -1.0f;
+                    show_centroids = Matrix();  // centroids meaningless in DBSCAN
+                }
+                g.renderer_obj->set_data(*disp, show_labels,
+                    show_centroids.rows() > 0 ? show_centroids : Matrix(1, disp->cols()));
+                g.renderer_obj->set_metrics(g.inertia, g.n_iter);
+            } else {
+                Vector neutral(disp_rows); neutral.fill(-1.0f);
+                Matrix cnt(1, disp->cols());
+                g.renderer_obj->set_data(*disp, neutral, cnt);
+                g.renderer_obj->set_metrics(0, 0);
             }
 
             // Render
@@ -65,9 +97,7 @@ void render_viewport(AppState& g) {
             float tx = img_pos.x + 10, ty = img_pos.y + 8;
             dl->AddText(ImVec2(tx, ty), IM_COL32(50, 150, 255, 255), "CLUSTERING ENGINE"); ty += 18;
 
-            size_t npts = g.clustering_done ?
-                (g.use_pca && g.reduced_data.rows() > 0 ? g.reduced_data.rows() : g.table.rows()) :
-                g.table.rows();
+            size_t npts = g.clustering_done ? disp_rows : g.table.rows();
             dl->AddText(ImVec2(tx, ty), IM_COL32(220, 220, 240, 200),
                 ("Points: " + std::to_string(npts)).c_str()); ty += 16;
 
@@ -108,11 +138,11 @@ void render_viewport(AppState& g) {
 
             // Centroid labels
             static const float cpal[][3] = {{0.95f,0.3f,0.3f},{0.3f,0.65f,0.95f},{0.3f,0.9f,0.4f},{0.95f,0.85f,0.25f},{0.9f,0.35f,0.9f},{0.25f,0.9f,0.9f},{0.95f,0.6f,0.25f},{0.65f,0.35f,0.95f},{0.55f,0.85f,0.3f},{0.35f,0.35f,0.95f}};
-            if (g.clustering_done && g.centroids.rows() > 0) {
-                for (size_t c = 0; c < (size_t)g.centroids.rows() && c < (size_t)g.cluster_sizes.size(); ++c) {
+            if (g.clustering_done && show_centroids.rows() > 0) {
+                for (size_t c = 0; c < (size_t)show_centroids.rows() && c < (size_t)g.cluster_sizes.size(); ++c) {
                     float sx, sy;
-                    float cz = g.centroids.cols() > 2 ? g.centroids[c][2] : 0.0f;
-                    if (g.renderer_obj->project_to_screen(g.centroids[c][0], g.centroids[c][1], cz, vp_w, vp_h, &sx, &sy)) {
+                    float cz = show_centroids.cols() > 2 ? show_centroids[c][2] : 0.0f;
+                    if (g.renderer_obj->project_to_screen(show_centroids[c][0], show_centroids[c][1], cz, vp_w, vp_h, &sx, &sy)) {
                         float px = img_pos.x + sx, py = img_pos.y + sy;
                         int ci = (int)c % 10;
                         dl->AddCircleFilled(ImVec2(px, py), 5.0f,

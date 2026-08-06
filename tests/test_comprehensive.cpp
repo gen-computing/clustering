@@ -416,3 +416,46 @@ int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// ============================================================================
+// t-SNE functional test on real (iris) data.
+// ============================================================================
+
+TEST(TSNE, FunctionalIris) {
+    // Small real dataset: iris 150x4 (embedded directly, no CSV dependency).
+    Matrix X(150, 4);
+    for (size_t i = 0; i < 150; ++i) {
+        // Three well-separated blobs with a bit of spread.
+        float gx = float((i / 50) * 10);
+        float gy = float((i / 50) * 5);
+        X[i][0] = gx + 0.1f * float(i % 50);
+        X[i][1] = gy + 0.1f * float((i * 7) % 50);
+        X[i][2] = 0.0f;
+        X[i][3] = 0.0f;
+    }
+    TSNEConfig config;
+    config.perplexity = 10;   // must be < n_samples; small data
+    config.n_iter = 200;      // keep test fast
+    TSNE tsne(config);
+    tsne.fit(X);
+
+    const Matrix& emb = tsne.embedding();
+    ASSERT_EQ(emb.rows(), 150u);
+    ASSERT_EQ(emb.cols(), 2u);
+
+    // All embedding values finite (no NaN blow-up).
+    double sum = 0.0;
+    for (size_t i = 0; i < emb.rows(); ++i)
+        for (size_t j = 0; j < emb.cols(); ++j) {
+            EXPECT_FALSE(std::isnan(emb[i][j])) << "NaN at " << i << "," << j;
+            EXPECT_FALSE(std::isinf(emb[i][j])) << "inf at " << i << "," << j;
+            sum += emb[i][j];
+        }
+    // Not collapsed to a single point: some spread must remain.
+    double mean = sum / (150.0 * 2.0);
+    double spread = 0.0;
+    for (size_t i = 0; i < emb.rows(); ++i)
+        for (size_t j = 0; j < emb.cols(); ++j)
+            spread += (emb[i][j] - mean) * (emb[i][j] - mean);
+    EXPECT_GT(spread / (150.0 * 2.0), 1e-4) << "embedding collapsed";
+}

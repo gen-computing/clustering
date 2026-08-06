@@ -40,6 +40,7 @@
 #include <GLFW/glfw3.h>
 #include <iostream>
 #include <vector>
+#include <memory>
 #include <cmath>
 #include <algorithm>
 #include <string>
@@ -84,9 +85,13 @@ struct RendererImpl {
     RendererConfig cfg;      // User-provided settings
 
     // ---- Data to visualize ----
-    Matrix pts;              // Data points
-    Vector lbls;             // Cluster labels
-    Matrix cent;             // Centroids
+    // Points may be referenced (not copied) when large, to avoid per-frame
+    // copies of disk-backed matrices. The caller must keep referenced data
+    // alive for as long as the renderer shows it.
+    const Matrix* pts = nullptr;      // Data points (owned or borrowed)
+    std::shared_ptr<Matrix> owned_pts; // Owns points when copied (small inputs)
+    Vector lbls;             // Cluster labels (copied, small)
+    Matrix cent;             // Centroids (copied, small)
     size_t n_pts = 0;        // Number of data points
     size_t n_clust = 0;      // Number of clusters
 
@@ -174,11 +179,11 @@ static void cb_scroll(GLFWwindow* w, double xo, double yo) {
     (void)xo;  // Horizontal scroll is unused (most mice don't have it)
     auto& r = g_impl;
 
-    // Adjust zoom: each scroll tick changes by 10%.
-    r.zoom *= (1.0f + (float)yo * 0.1f);
+    // Adjust zoom: each scroll tick changes by 15%.
+    r.zoom *= (1.0f + (float)yo * 0.15f);
 
     // Clamp zoom to prevent going inside the data or too far out.
-    r.zoom = std::max(0.001f, std::min(100.0f, r.zoom));
+    r.zoom = std::max(0.001f, std::min(500.0f, r.zoom));
 }
 
 // ============================================================================
@@ -323,8 +328,10 @@ void Renderer::shutdown() {
     if (r.window) {
         glfwDestroyWindow(r.window);
         r.window = nullptr;
+        // Only terminate GLFW if this renderer created the window. In
+        // headless (embedded/ImGui) mode the host owns the GLFW lifetime.
+        glfwTerminate();
     }
-    glfwTerminate();
     r.inited = false;
 }
 
@@ -334,7 +341,15 @@ void Renderer::shutdown() {
 
 void Renderer::set_data(const Matrix& p, const Vector& l, const Matrix& c) {
     auto& r = g_impl;
-    r.pts = p;
+    // Copy small inputs (callers may pass temporaries); borrow large ones.
+    const size_t ref_threshold = 128u * 1024u * 1024u; // 128 MiB
+    if (p.rows() * p.cols() * sizeof(float) > ref_threshold) {
+        r.owned_pts.reset();
+        r.pts = &p;
+    } else {
+        r.owned_pts = std::make_shared<Matrix>(p);
+        r.pts = r.owned_pts.get();
+    }
     r.lbls = l;
     r.cent = c;
     r.n_pts = p.rows();
@@ -420,371 +435,7 @@ void Renderer::render_frame() {
     // Clear both color buffer (pixels) and depth buffer (Z-ordering).
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    float aspect = (float)fbw / fbh;  // Window aspect ratio (prevents stretching)
-
-    // ---- Compute bounding box and center of data ----
-    // This determines where the camera looks and how far away it should be.
-    float cx = 0, cy = 0, cz = 0;       // Center of the data
-    float max_range = 1.0f;              // Half the largest dimension
-
-    if (r.n_pts > 0) {
-        // Find min/max for each axis.
-        float minx = r.pts[0][0], maxx = minx;
-        float miny = r.pts[0][1], maxy = miny;
-        float minz = 0, maxz = 0;
-
-        // If data has 3+ columns, use column 2 as Z coordinate.
-        if (r.pts.cols() > 2) {
-            minz = r.pts[0][2];
-            maxz = minz;
-        }
-
-        // Scan all points to find axis-aligned bounding box.
-        for (size_t i = 0; i < r.n_pts; i++) {
-            if (r.pts[i][0] < minx) minx = r.pts[i][0];
-            if (r.pts[i][0] > maxx) maxx = r.pts[i][0];
-            if (r.pts[i][1] < miny) miny = r.pts[i][1];
-            if (r.pts[i][1] > maxy) maxy = r.pts[i][1];
-            if (r.pts.cols() > 2) {
-                if (r.pts[i][2] < minz) minz = r.pts[i][2];
-                if (r.pts[i][2] > maxz) maxz = r.pts[i][2];
-            }
-        }
-
-        // Center = average of min and max for each axis.
-        cx = (minx + maxx) / 2;
-        cy = (miny + maxy) / 2;
-        cz = (minz + maxz) / 2;
-
-        // Range = half the largest dimension (used for camera distance and axis length).
-        max_range = std::max({maxx - minx, maxy - miny, maxz - minz}) / 2.0f;
-        if (max_range < 0.1f) max_range = 1.0f;  // Prevent division by zero
-    }
-
-    // ---- Compute camera position (orbital/spherical coordinates) ----
-    // Camera distance from center: proportional to data range, inverse to zoom.
-    // 3.0 * range: place camera at 3× the data extent (comfortable viewing distance).
-    // / r.zoom: closer when zoomed in.
-    float dist = max_range * 3.0f / r.zoom;
-
-    // Spherical → Cartesian conversion for orbital camera.
-    // ey: Y position = sin(vertical_angle) * distance.
-    // ex, ez: XZ position on the horizontal circle = cos(vertical_angle) * distance,
-    //         then split by horizontal angle (cos for X, sin for Z).
-    float ex = cx + dist * std::sin(r.rot_y) * std::cos(r.rot_x);
-    float ey = cy + dist * std::sin(r.rot_x);
-    float ez = cz + dist * std::cos(r.rot_y) * std::cos(r.rot_x);
-
-    // ---- Build matrices ----
-    // Perspective projection: 45° field of view for a natural look.
-    Mat4 proj3d = Mat4::perspective(45.0f * 3.14159f / 180.0f, aspect, dist * 0.01f, dist * 20.0f);
-
-    // View matrix: camera at (ex,ey,ez), looking at (cx,cy,cz), up direction (0,1,0).
-    Mat4 view3d = Mat4::lookAt(ex, ey, ez, cx, cy, cz, 0, 1, 0);
-
-    // MVP = Projection × View. (Model is identity -- data is already in world space.)
-    Mat4 mvp3d = proj3d * view3d;
-
-    // ---- DRAW AXES (3 colored lines: red=X, green=Y, blue=Z) ----
-    {
-        float al = max_range * 1.2f;  // Axis length: 20% longer than data extent
-
-        // Each line: start position (3 floats) + color (3 floats) → 6 floats per vertex.
-        // Each axis is a line segment from center in the positive direction.
-        // Format: x,y,z, r,g,b
-        float ax[] = {
-            // X axis (red): from center to center+al in X
-            cx, cy, cz,     0.8f, 0.2f, 0.2f,
-            cx+al, cy, cz,  0.8f, 0.2f, 0.2f,
-
-            // Y axis (green): from center to center+al in Y
-            cx, cy, cz,     0.2f, 0.8f, 0.2f,
-            cx, cy+al, cz,  0.2f, 0.8f, 0.2f,
-
-            // Z axis (blue): from center to center+al in Z
-            cx, cy, cz,     0.2f, 0.2f, 0.8f,
-            cx, cy, cz+al,  0.2f, 0.2f, 0.8f,
-        };
-
-        glUseProgram(r.line_prog);
-        // Upload the MVP matrix to the GPU (uniform variable).
-        glUniformMatrix4fv(glGetUniformLocation(r.line_prog, "uMVP"), 1, GL_FALSE, mvp3d.m);
-
-        // Bind the axis VAO and upload vertex data.
-        glBindVertexArray(r.vao_ax);
-        glBindBuffer(GL_ARRAY_BUFFER, r.vbo_ax);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(ax), ax, GL_STATIC_DRAW);
-
-        // Attribute 0: position (3 floats, starting at offset 0, stride=6 floats per vertex)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-
-        // Attribute 1: color (3 floats, starting at offset 3 floats, same stride)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-
-        // Draw lines (not filled polygons). 2 pixels wide.
-        glLineWidth(2.0f);
-        glDrawArrays(GL_LINES, 0, 6);  // 6 vertices = 3 lines
-    }
-
-    // ---- DRAW POINTS (colored circles, one per data point) ----
-    glUseProgram(r.point_prog);
-    glUniformMatrix4fv(glGetUniformLocation(r.point_prog, "uMVP"), 1, GL_FALSE, mvp3d.m);
-    glUniform1f(glGetUniformLocation(r.point_prog, "uSize"), r.cfg.point_size);
-
-    if (r.n_pts > 0) {
-        // Build vertex buffer: 6 floats per point (position3 + color3).
-        std::vector<float> vd(r.n_pts * 6);
-
-        for (size_t i = 0; i < r.n_pts; i++) {
-            // Cluster determines color (modulo palette size for >10 clusters).
-            // Label -1 = unclustered (gray).
-            float gray = 0.45f;
-            float cr = gray, cg = gray, cb = gray;
-            if (r.lbls[i] >= 0) {
-                size_t c = (size_t)r.lbls[i] % 10;
-                cr = palette[c][0];
-                cg = palette[c][1];
-                cb = palette[c][2];
-            }
-
-            // Position: first 3 features (if exists, else 0).
-            vd[i * 6 + 0] = r.pts[i][0];
-            vd[i * 6 + 1] = r.pts[i][1];
-            vd[i * 6 + 2] = (r.pts.cols() > 2) ? r.pts[i][2] : 0.0f;
-
-            // Color from palette.
-            vd[i * 6 + 3] = cr;
-            vd[i * 6 + 4] = cg;
-            vd[i * 6 + 5] = cb;
-        }
-
-        glBindVertexArray(r.vao_pts);
-        glBindBuffer(GL_ARRAY_BUFFER, r.vbo_pts);
-        glBufferData(GL_ARRAY_BUFFER, vd.size() * sizeof(float), vd.data(), GL_DYNAMIC_DRAW);
-
-        // Attribute 0: position (3 floats, stride=6 floats)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-
-        // Attribute 1: color (3 floats, offset=3 floats)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-
-        glDrawArrays(GL_POINTS, 0, r.n_pts);
-    }
-
-    // ---- DRAW CENTROIDS (larger white points) ----
-    if (r.n_clust > 0 && r.cfg.show_centroids) {
-        std::vector<float> cd(r.n_clust * 6);
-
-        for (size_t i = 0; i < r.n_clust; i++) {
-            // Position: same format as data points.
-            cd[i * 6 + 0] = r.cent[i][0];
-            cd[i * 6 + 1] = r.cent[i][1];
-            cd[i * 6 + 2] = (r.cent.cols() > 2) ? r.cent[i][2] : 0.0f;
-
-            // Color: white (1, 1, 1).
-            cd[i * 6 + 3] = 1.0f;
-            cd[i * 6 + 4] = 1.0f;
-            cd[i * 6 + 5] = 1.0f;
-        }
-
-        // Point size for centroids: 2.5× larger than regular points.
-        glUniform1f(glGetUniformLocation(r.point_prog, "uSize"), r.cfg.point_size * 2.5f);
-
-        glBindVertexArray(r.vao_cent);
-        glBindBuffer(GL_ARRAY_BUFFER, r.vbo_cent);
-        glBufferData(GL_ARRAY_BUFFER, cd.size() * sizeof(float), cd.data(), GL_DYNAMIC_DRAW);
-
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-        glEnableVertexAttribArray(1);
-
-        glDrawArrays(GL_POINTS, 0, r.n_clust);
-    }
-
-    // ---- DRAW TEXT OVERLAY (2D) ----
-    // Disable depth testing so text is always on top (ignores 3D scene depth).
-    glDisable(GL_DEPTH_TEST);
-
-    {
-        // Starting position: top-left with some padding.
-        float sx = 16.0f;
-        float sy = (float)fbh - 30.0f;  // Top of screen, minus margin
-        float scale = 1.8f;
-        float char_w = 7.0f * scale;
-        float char_h = 10.0f * scale;
-        float sp = 2.0f * scale;  // Inter-character spacing
-
-        // Build text lines for the overlay.
-        std::vector<std::string> lines;
-        lines.push_back("CLUSTERING ENGINE");
-        lines.push_back("Points: " + std::to_string(r.n_pts));
-        lines.push_back("Clusters: " + std::to_string(r.n_clust));
-        lines.push_back("Iterations: " + std::to_string(r.iterations));
-        {
-            std::ostringstream oss;
-            oss << std::fixed << std::setprecision(1) << r.inertia;
-            lines.push_back("Inertia: " + oss.str());
-        }
-        {
-            std::ostringstream oss;
-            oss << std::fixed << std::setprecision(0) << r.fps << " FPS";
-            lines.push_back(oss.str());
-        }
-
-        // ---- Bitmap font definition ----
-        // Each character is a 4×5 grid. '#' = pixel on, ' ' = pixel off.
-        // Characters are 5 strings of 4 characters each, concatenated.
-        // get_char_bitmap extracts a list of (col, row) coordinates for '#' positions.
-        auto get_char_bitmap = [](char c) -> std::vector<std::pair<float, float>> {
-            // Font data: 5 strings of 4 chars per character.
-            // Index into this array is the ASCII code of the character.
-            static const char* font[128] = {};
-            font[' '] = "    ""    ""    ""    ""    ";
-            font['0'] = " ## ""#  #""#  #""#  #"" ## ";
-            font['1'] = "  # "" ## ""  # ""  # "" ###";
-            font['2'] = " ## ""#  #""  # "" #  ""####";
-            font['3'] = " ## ""   #"" ## ""   #"" ## ";
-            font['4'] = "#  #""#  #""####""   #""   #";
-            font['5'] = "####""#   ""### ""   #""### ";
-            font['6'] = " ## ""#   ""### ""#  #"" ## ";
-            font['7'] = "####""   #""  # "" #  "" #  ";
-            font['8'] = " ## ""#  #"" ## ""#  #"" ## ";
-            font['9'] = " ## ""#  #"" ###""   #"" ## ";
-            font['C'] = " ## ""#   ""#   ""#   "" ## ";
-            font['L'] = "#   ""#   ""#   ""#   ""####";
-            font['U'] = "#  #""#  #""#  #""#  #"" ## ";
-            font['S'] = " ## ""#   "" ## ""   #"" ## ";
-            font['T'] = "####""  # ""  # ""  # ""  # ";
-            font['E'] = "####""#   ""### ""#   ""####";
-            font['R'] = "### ""#  #""### ""# # ""#  #";
-            font['I'] = " ###""  # ""  # ""  # "" ###";
-            font['N'] = "#  #""## #""# ##""#  #""#  #";
-            font['G'] = " ###""#   ""# ##""#  #"" ###";
-            font['A'] = " ## ""#  #""####""#  #""#  #";
-            font['P'] = "### ""#  #""### ""#   ""#   ";
-            font['O'] = " ## ""#  #""#  #""#  #"" ## ";
-            font['D'] = "##  ""#  #""#  #""#  #""##  ";
-            font['F'] = "####""#   ""### ""#   ""#   ";
-            font['H'] = "#  #""#  #""####""#  #""#  #";
-            font['M'] = "#  #""## ##""# ##""#  #""#  #";
-            font['W'] = "#  #""#  #""# ##""## #""#  #";
-            font['B'] = "### ""#  #""### ""#  #""### ";
-            font['K'] = "#  #""# # ""##  ""# # ""#  #";
-            font['Y'] = "#  #""#  #"" ## ""  # ""  # ";
-            font['V'] = "#  #""#  #""#  #"" #  ""  # ";
-            font['X'] = "#  #"" #  ""  # "" #  ""#  #";
-            font['Z'] = "####""   #""  # "" #  ""####";
-            font['Q'] = " ## ""#  #""#  #""# # "" ## ";
-            font['J'] = "  ##""   #""   #""#  #"" ## ";
-            font['.'] = "    ""    ""    ""    ""  # ";
-            font[':'] = "    ""  # ""    ""  # ""    ";
-
-            // Copy digit font entries to make '0'+0, '0'+1, ..., '0'+9 work.
-            font['0'+0] = font['0'];
-            font['0'+1] = font['1'];
-            font['0'+2] = font['2'];
-            font['0'+3] = font['3'];
-            font['0'+4] = font['4'];
-            font['0'+5] = font['5'];
-            font['0'+6] = font['6'];
-            font['0'+7] = font['7'];
-            font['0'+8] = font['8'];
-            font['0'+9] = font['9'];
-
-            // Extract dot positions from the font definition.
-            if (c >= 0 && c < 128 && font[c]) {
-                std::vector<std::pair<float, float>> pts;
-                const char* f = font[c];
-                // 5 rows (top to bottom), 4 columns (left to right).
-                for (int row = 0; row < 5; row++) {
-                    for (int col = 0; col < 4; col++) {
-                        if (f[row * 4 + col] == '#') {
-                            // Y is flipped: row 0 = top of character, but we want row 0 at bottom.
-                            // So we use (4.0f - row) to flip.
-                            pts.push_back({(float)col, 4.0f - (float)row});
-                        }
-                    }
-                }
-                return pts;
-            }
-            return {};  // Unknown character = nothing drawn
-        };
-
-        // Orthographic projection for 2D text: pixel coordinates.
-        // Left=0, Right=fbw, Bottom=0, Top=fbh (origin at bottom-left).
-        // This matches typical screen coordinates.
-        Mat4 ortho = Mat4::ortho(0, (float)fbw, 0, (float)fbh, -1, 1);
-
-        // Use point shader for text (draws each dot as a circle).
-        glUseProgram(r.point_prog);
-        glUniformMatrix4fv(glGetUniformLocation(r.point_prog, "uMVP"), 1, GL_FALSE, ortho.m);
-        glUniform1f(glGetUniformLocation(r.point_prog, "uSize"), 3.0f * scale);
-
-        // Draw each line of text.
-        for (size_t line = 0; line < lines.size(); line++) {
-            float lx = sx;
-            float ly = sy - line * (char_h + sp);  // Each line below the previous
-
-            // Title is blue, other lines are light gray.
-            float cr = 0.9f, cg = 0.9f, cb = 0.95f;    // Light gray default
-            if (line == 0) { cr = 0.3f; cg = 0.7f; cb = 1.0f; }  // Title: blue
-
-            std::vector<float> verts;
-            for (char ch : lines[line]) {
-                auto bitmap = get_char_bitmap(ch);
-                for (auto& [bx, by] : bitmap) {
-                    // Position each dot: character origin + bitmap offset × scale.
-                    float px = lx + bx * scale;
-                    float py = ly + by * scale;
-
-                    // Each dot as a quad (2 triangles = 6 vertices).
-                    // Each vertex: x,y, u,v, r,g,b (7 floats).
-                    float q[] = {
-                        px, py,           0,0, cr,cg,cb,
-                        px+scale, py,     1,0, cr,cg,cb,
-                        px+scale, py+scale, 1,1, cr,cg,cb,
-                        px, py,           0,0, cr,cg,cb,
-                        px+scale, py+scale, 1,1, cr,cg,cb,
-                        px, py+scale,     0,1, cr,cg,cb,
-                    };
-                    verts.insert(verts.end(), q, q + 42);  // 6 vertices × 7 floats = 42
-                }
-                lx += char_w + sp;  // Advance to next character position
-            }
-
-            if (!verts.empty()) {
-                glBindVertexArray(r.vao_txt);
-                glBindBuffer(GL_ARRAY_BUFFER, r.vbo_txt);
-                glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(float), verts.data(), GL_DYNAMIC_DRAW);
-
-                // Attribute 0: position (2 floats, stride=7 floats, offset=0)
-                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)0);
-                glEnableVertexAttribArray(0);
-
-                // Attribute 1: UV (2 floats, stride=7, offset=2 floats)
-                glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(2 * sizeof(float)));
-                glEnableVertexAttribArray(1);
-
-                // Attribute 2: color (3 floats, stride=7, offset=4 floats)
-                glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(4 * sizeof(float)));
-                glEnableVertexAttribArray(2);
-
-                // Draw: verts.size()/7 = number of vertices.
-                glDrawArrays(GL_TRIANGLES, 0, verts.size() / 7);
-            }
-        }
-    }
-
-    // Re-enable depth test for 3D rendering (clean up state for next frame).
-    glEnable(GL_DEPTH_TEST);
-
-    // Unbind VAO (good practice, prevents accidental modification).
-    glBindVertexArray(0);
+    render_impl(fbw, fbh, true);
 }
 
 // ============================================================================
@@ -805,17 +456,26 @@ void Renderer::render_to_fbo(unsigned int fbo, int width, int height) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
 
+    render_impl(width, height, false);
+
+    // Restore default framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void Renderer::render_impl(int width, int height, bool with_fps) {
+    auto& r = g_impl;
+
     float aspect = (float)width / height;
 
     float cx = 0, cy = 0, cz = 0, max_range = 1.0f;
     if (r.n_pts > 0) {
-        float minx = r.pts[0][0], maxx = minx, miny = r.pts[0][1], maxy = miny;
+        float minx = (*r.pts)[0][0], maxx = minx, miny = (*r.pts)[0][1], maxy = miny;
         float minz = 0, maxz = 0;
-        if (r.pts.cols() > 2) { minz = r.pts[0][2]; maxz = minz; }
+        if (r.pts->cols() > 2) { minz = (*r.pts)[0][2]; maxz = minz; }
         for (size_t i = 0; i < r.n_pts; i++) {
-            if (r.pts[i][0] < minx) minx = r.pts[i][0]; if (r.pts[i][0] > maxx) maxx = r.pts[i][0];
-            if (r.pts[i][1] < miny) miny = r.pts[i][1]; if (r.pts[i][1] > maxy) maxy = r.pts[i][1];
-            if (r.pts.cols() > 2) { if (r.pts[i][2] < minz) minz = r.pts[i][2]; if (r.pts[i][2] > maxz) maxz = r.pts[i][2]; }
+            if ((*r.pts)[i][0] < minx) minx = (*r.pts)[i][0]; if ((*r.pts)[i][0] > maxx) maxx = (*r.pts)[i][0];
+            if ((*r.pts)[i][1] < miny) miny = (*r.pts)[i][1]; if ((*r.pts)[i][1] > maxy) maxy = (*r.pts)[i][1];
+            if (r.pts->cols() > 2) { if ((*r.pts)[i][2] < minz) minz = (*r.pts)[i][2]; if ((*r.pts)[i][2] > maxz) maxz = (*r.pts)[i][2]; }
         }
         cx = (minx + maxx) / 2; cy = (miny + maxy) / 2; cz = (minz + maxz) / 2;
         max_range = std::max({maxx - minx, maxy - miny, maxz - minz}) / 2.0f;
@@ -864,8 +524,8 @@ void Renderer::render_to_fbo(unsigned int fbo, int width, int height) {
                 size_t c = (size_t)r.lbls[i] % 10;
                 cr = palette[c][0]; cg = palette[c][1]; cb = palette[c][2];
             }
-            vd[i * 6 + 0] = r.pts[i][0]; vd[i * 6 + 1] = r.pts[i][1];
-            vd[i * 6 + 2] = (r.pts.cols() > 2) ? r.pts[i][2] : 0.0f;
+            vd[i * 6 + 0] = (*r.pts)[i][0]; vd[i * 6 + 1] = (*r.pts)[i][1];
+            vd[i * 6 + 2] = (r.pts->cols() > 2) ? (*r.pts)[i][2] : 0.0f;
             vd[i * 6 + 3] = cr; vd[i * 6 + 4] = cg; vd[i * 6 + 5] = cb;
         }
         glBindVertexArray(r.vao_pts);
@@ -905,6 +565,10 @@ void Renderer::render_to_fbo(unsigned int fbo, int width, int height) {
             "Iterations: " + std::to_string(r.iterations)
         };
         { std::ostringstream oss; oss << std::fixed << std::setprecision(1) << r.inertia; lines.push_back("Inertia: " + oss.str()); }
+        if (with_fps) {
+            std::ostringstream oss; oss << std::fixed << std::setprecision(0) << r.fps << " FPS";
+            lines.push_back(oss.str());
+        }
 
         Mat4 ortho = Mat4::ortho(0, (float)width, 0, (float)height, -1, 1);
         glUseProgram(r.point_prog);
@@ -945,8 +609,7 @@ void Renderer::render_to_fbo(unsigned int fbo, int width, int height) {
     }
     glEnable(GL_DEPTH_TEST);
 
-    // Restore default framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindVertexArray(0);
 }
 
 // ============================================================================
@@ -966,7 +629,7 @@ void Renderer::rotate_view(float dx, float dy) {
 void Renderer::zoom_view(float factor) {
     auto& r = g_impl;
     r.zoom *= factor;
-    r.zoom = std::max(0.001f, std::min(100.0f, r.zoom));
+    r.zoom = std::max(0.001f, std::min(500.0f, r.zoom));
 }
 
 void Renderer::reset_view() {
@@ -982,13 +645,13 @@ bool Renderer::project_to_screen(float wx, float wy, float wz, int vp_w, int vp_
 
     float cx = 0, cy = 0, cz = 0, max_range = 1.0f;
     if (r.n_pts > 0) {
-        float minx = r.pts[0][0], maxx = minx, miny = r.pts[0][1], maxy = miny;
+        float minx = (*r.pts)[0][0], maxx = minx, miny = (*r.pts)[0][1], maxy = miny;
         float minz = 0, maxz = 0;
-        if (r.pts.cols() > 2) { minz = r.pts[0][2]; maxz = minz; }
+        if (r.pts->cols() > 2) { minz = (*r.pts)[0][2]; maxz = minz; }
         for (size_t i = 0; i < r.n_pts; i++) {
-            if (r.pts[i][0] < minx) minx = r.pts[i][0]; if (r.pts[i][0] > maxx) maxx = r.pts[i][0];
-            if (r.pts[i][1] < miny) miny = r.pts[i][1]; if (r.pts[i][1] > maxy) maxy = r.pts[i][1];
-            if (r.pts.cols() > 2) { if (r.pts[i][2] < minz) minz = r.pts[i][2]; if (r.pts[i][2] > maxz) maxz = r.pts[i][2]; }
+            if ((*r.pts)[i][0] < minx) minx = (*r.pts)[i][0]; if ((*r.pts)[i][0] > maxx) maxx = (*r.pts)[i][0];
+            if ((*r.pts)[i][1] < miny) miny = (*r.pts)[i][1]; if ((*r.pts)[i][1] > maxy) maxy = (*r.pts)[i][1];
+            if (r.pts->cols() > 2) { if ((*r.pts)[i][2] < minz) minz = (*r.pts)[i][2]; if ((*r.pts)[i][2] > maxz) maxz = (*r.pts)[i][2]; }
         }
         cx = (minx + maxx) / 2; cy = (miny + maxy) / 2; cz = (minz + maxz) / 2;
         max_range = std::max({maxx - minx, maxy - miny, maxz - minz}) / 2.0f;

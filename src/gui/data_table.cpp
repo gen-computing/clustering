@@ -35,16 +35,34 @@ DataTable& DataTable::operator=(DataTable&& other) noexcept {
 
 void DataTable::set_data(const Matrix& data, std::vector<std::string> col_names) {
     data_ = data;
+    init_from_data(std::move(col_names));
+}
+
+void DataTable::set_data(Matrix&& data, std::vector<std::string> col_names) {
+    data_ = std::move(data);
+    init_from_data(std::move(col_names));
+}
+
+void DataTable::init_from_data(std::vector<std::string> col_names) {
     if (col_names.empty()) {
         col_names_.clear();
-        for (size_t j = 0; j < data.cols(); ++j)
-            col_names_.push_back(std::string(1, 'A' + (char)j));
+        for (size_t j = 0; j < data_.cols(); ++j) {
+            // Excel-style letters: A..Z, AA, AB, ...
+            std::string name;
+            size_t n = j;
+            while (true) {
+                name.insert(name.begin(), char('A' + n % 26));
+                if (n < 26) break;
+                n = n / 26 - 1;
+            }
+            col_names_.push_back(std::move(name));
+        }
     } else {
         col_names_ = std::move(col_names);
     }
-    missing_.assign(data.rows() * data.cols(), 0);
-    for (size_t i = 0; i < data.rows(); ++i)
-        for (size_t j = 0; j < data.cols(); ++j)
+    missing_.assign(data_.rows() * data_.cols(), 0);
+    for (size_t i = 0; i < data_.rows(); ++i)
+        for (size_t j = 0; j < data_.cols(); ++j)
             if (std::isnan(data_[i][j]))
                 missing_[i * data_.cols() + j] = 1;
 }
@@ -129,6 +147,35 @@ void DataTable::remove_column(size_t col) {
     missing_ = std::move(new_missing);
     if (col < col_names_.size())
         col_names_.erase(col_names_.begin() + col);
+}
+
+void DataTable::insert_column(size_t col, const std::vector<float>& values,
+                              const std::vector<uint8_t>& missing, const std::string& name) {
+    if (col > cols()) return;
+    size_t r = rows(), c = cols();
+    Matrix new_data(r, c + 1);
+    std::vector<uint8_t> new_missing(r * (c + 1));
+    for (size_t i = 0; i < r; ++i) {
+        size_t dst = 0;
+        for (size_t j = 0; j <= c; ++j) {
+            if (j == col) {
+                if (i < values.size()) {
+                    new_data[i][dst] = values[i];
+                    new_missing[i * (c + 1) + dst] = i < missing.size() ? missing[i] : 0;
+                }
+                dst++;
+                continue;
+            }
+            size_t sj = j < col ? j : j - 1;
+            new_data[i][dst] = data_[i][sj];
+            new_missing[i * (c + 1) + dst] = missing_[i * c + sj];
+            dst++;
+        }
+    }
+    data_ = std::move(new_data);
+    missing_ = std::move(new_missing);
+    if (col <= col_names_.size())
+        col_names_.insert(col_names_.begin() + col, name);
 }
 
 void DataTable::drop_rows_with_missing() {

@@ -12,6 +12,7 @@ struct EvalResult {
     float silhouette_score;
     float davies_bouldin;
     float calinski_harabasz;
+    size_t noise = 0;   // DBSCAN: number of noise points (0 for KMeans-family)
 };
 
 class ClusterEvaluator {

@@ -105,3 +105,40 @@ TEST(ThreadPoolTest, ConcurrentIncrement) {
 
     EXPECT_EQ(counter, 1000);
 }
+
+// ============================================================================
+// Distance computation thread-count parity: results must not depend on
+// max_threads (0 = auto, 1 = serial, 4 = parallel).
+// ============================================================================
+
+#include "clustering/kmeans.h"
+#include "clustering/distance.h"
+
+TEST(DistanceParity, ThreadCountsAgree) {
+    // Deterministic dataset (no randomness in the points).
+    Matrix X(500, 8);
+    for (size_t i = 0; i < 500; ++i)
+        for (size_t j = 0; j < 8; ++j)
+            X[i][j] = float(int(i * 31 + j * 7) % 100) / 10.0f;
+
+    Matrix centroids(5, 8);
+    for (size_t i = 0; i < 5; ++i)
+        for (size_t j = 0; j < 8; ++j)
+            centroids[i][j] = float(int(i * 13 + j * 3) % 100) / 10.0f;
+
+    auto run = [&](size_t threads) {
+        Matrix d(500, 5);
+        compute_distance_matrix(X, centroids, d, threads);
+        return d;
+    };
+
+    Matrix serial = run(1);
+    Matrix auto_th = run(0);
+    Matrix parallel = run(4);
+
+    for (size_t i = 0; i < 500; ++i)
+        for (size_t j = 0; j < 5; ++j) {
+            EXPECT_NEAR(serial[i][j], auto_th[i][j], 1e-4f) << "serial vs auto @" << i << "," << j;
+            EXPECT_NEAR(serial[i][j], parallel[i][j], 1e-4f) << "serial vs parallel @" << i << "," << j;
+        }
+}

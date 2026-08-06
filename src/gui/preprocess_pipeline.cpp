@@ -22,7 +22,9 @@ bool PreprocessPipeline::undo() {
     if (!can_undo()) return false;
     current_--;
     const auto& action = history_[current_];
-    if (action.removed_rows.empty()) {
+    if (action.col_index != SIZE_MAX) {
+        table_->insert_column(action.col_index, action.col_values, action.col_missing, action.col_name);
+    } else if (action.removed_rows.empty()) {
         for (size_t k = 0; k < action.cells.size(); ++k) {
             auto [row, col] = action.cells[k];
             table_->fill_value(row, col, action.old_values[k]);
@@ -61,15 +63,36 @@ bool PreprocessPipeline::undo() {
 
 bool PreprocessPipeline::redo() {
     if (!can_redo()) return false;
-    // Redo: re-apply the action's forward effect.
-    // For fill actions, set cells back to NaN (missing).
-    // For transform actions, we'd need the result values -- not stored yet,
-    // so redo just marks those cells as dirty.
     const auto& action = history_[current_];
-    for (size_t k = 0; k < action.cells.size(); ++k) {
-        auto [row, col] = action.cells[k];
-        table_->data_[row][col] = std::numeric_limits<float>::quiet_NaN();
-        table_->missing_[row * table_->cols() + col] = 1;
+    if (action.col_index != SIZE_MAX) {
+        table_->remove_column(action.col_index);
+    } else if (action.removed_rows.empty()) {
+        for (size_t k = 0; k < action.cells.size(); ++k) {
+            auto [row, col] = action.cells[k];
+            if (k < action.new_values.size())
+                table_->fill_value(row, col, action.new_values[k]);
+        }
+    } else {
+        size_t r = table_->rows(), c = table_->cols();
+        size_t new_r = r - action.removed_rows.size() / c;
+        Matrix new_data(new_r, c);
+        std::vector<uint8_t> new_missing(new_r * c);
+        size_t dst = 0;
+        for (size_t i = 0; i < r; ++i) {
+            bool was_removed = false;
+            for (size_t k = 0; k < action.cells.size(); ++k) {
+                if (action.cells[k].first == i) { was_removed = true; break; }
+            }
+            if (!was_removed && dst < new_r) {
+                for (size_t j = 0; j < c; ++j) {
+                    new_data[dst][j] = table_->data()[i][j];
+                    new_missing[dst * c + j] = 0;
+                }
+                dst++;
+            }
+        }
+        table_->data_ = std::move(new_data);
+        table_->missing_ = std::move(new_missing);
     }
     current_++;
     return true;
@@ -92,6 +115,7 @@ void PreprocessPipeline::normalize_column(size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(v);
             v /= norm;
+            action.new_values.push_back(v);
         }
     }
     apply(std::move(action));
@@ -121,6 +145,7 @@ void PreprocessPipeline::standardize_column(size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(v);
             v = (v - mean) / col_std;
+            action.new_values.push_back(v);
         }
     }
     apply(std::move(action));
@@ -148,6 +173,7 @@ void PreprocessPipeline::minmax_scale_column(size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(v);
             v = (v - min_v) / range;
+            action.new_values.push_back(v);
         }
     }
     apply(std::move(action));
@@ -163,6 +189,7 @@ void PreprocessPipeline::log_transform_column(size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(v);
             v = std::log(std::max(v, 1e-10f));
+            action.new_values.push_back(v);
         }
     }
     apply(std::move(action));
@@ -188,10 +215,61 @@ void PreprocessPipeline::clip_outliers_column(size_t col, float lower_pct, float
                 action.cells.push_back({i, col});
                 action.old_values.push_back(v);
                 v = std::max(lo, std::min(hi, v));
+                action.new_values.push_back(v);
             }
         }
     }
     if (!action.cells.empty()) apply(std::move(action));
+}
+
+void PreprocessPipeline::drop_row(size_t row) {
+    if (row >= table_->rows()) return;
+    size_t r = table_->rows(), c = table_->cols();
+    PreprocessAction action;
+    action.description = "Drop row " + std::to_string(row);
+    action.original_rows = r - 1;
+    action.cells.push_back({row, 0});
+    action.removed_rows.reserve(c);
+    for (size_t j = 0; j < c; ++j) {
+        action.removed_rows.push_back(table_->data()[row][j]);
+        action.old_values.push_back(table_->data()[row][j]);
+    }
+    table_->remove_row(row);
+    apply(std::move(action));
+}
+
+void PreprocessPipeline::drop_column(size_t col) {
+    if (col >= table_->cols()) return;
+    size_t r = table_->rows();
+    PreprocessAction action;
+    action.description = "Drop column " + std::to_string(col);
+    action.col_index = col;
+    action.col_name = col < table_->column_names().size() ? table_->column_names()[col] : "";
+    action.col_values.reserve(r);
+    action.col_missing.reserve(r);
+    for (size_t i = 0; i < r; ++i) {
+        action.col_values.push_back(table_->data()[i][col]);
+        action.col_missing.push_back(table_->is_missing(i, col) ? 1 : 0);
+    }
+    table_->remove_column(col);
+    apply(std::move(action));
+}
+
+void PreprocessPipeline::drop_rows_with_missing() {
+    size_t r = table_->rows(), c = table_->cols();
+    PreprocessAction action;
+    action.description = "Drop rows with missing values";
+    for (size_t i = 0; i < r; ++i) {
+        if (table_->row_missing_count(i) > 0) {
+            action.cells.push_back({i, 0});
+            for (size_t j = 0; j < c; ++j)
+                action.removed_rows.push_back(table_->data()[i][j]);
+        }
+    }
+    if (action.cells.empty()) return;
+    action.original_rows = r - action.cells.size();
+    table_->drop_rows_with_missing();
+    apply(std::move(action));
 }
 
 void PreprocessPipeline::clear() {

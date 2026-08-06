@@ -22,13 +22,11 @@ void ColumnStatsCache::invalidate_column(size_t col) {
     if (col < cache_.size()) cache_[col].computed = false;
 }
 
-const ColumnStats& ColumnStatsCache::get(size_t col) {
-    if (col >= cache_.size()) {
-        static ColumnStats empty;
-        return empty;
-    }
+// Returns nullptr when col is out of range (no static scratch state).
+const ColumnStats* ColumnStatsCache::get(size_t col) {
+    if (col >= cache_.size()) return nullptr;
     if (!cache_[col].computed) compute(col);
-    return cache_[col];
+    return &cache_[col];
 }
 
 void ColumnStatsCache::compute(size_t col) {
@@ -39,9 +37,13 @@ void ColumnStatsCache::compute(size_t col) {
 
     s.count = n;
     s.missing_count = 0;
-    double sum = 0.0, sum_sq = 0.0;
     s.min_val = std::numeric_limits<float>::max();
     s.max_val = std::numeric_limits<float>::lowest();
+
+    // Welford's online algorithm: numerically stable mean/std_dev in one pass
+    // (no sum of squares -> no catastrophic cancellation for large values).
+    double mean = 0.0, m2 = 0.0;
+    size_t valid = 0;
 
     std::vector<float> values;
     values.reserve(n);
@@ -53,17 +55,18 @@ void ColumnStatsCache::compute(size_t col) {
         }
         float v = table_->data()[i][col];
         values.push_back(v);
-        sum += v;
-        sum_sq += v * v;
+        ++valid;
+        double delta = v - mean;
+        mean += delta / valid;
+        m2 += delta * (v - mean);
         if (v < s.min_val) s.min_val = v;
         if (v > s.max_val) s.max_val = v;
     }
 
-    size_t valid = values.size();
     if (valid == 0) { s.computed = true; return; }
 
-    s.mean = static_cast<float>(sum / valid);
-    s.std_dev = valid > 1 ? std::sqrt(std::max(0.0, (sum_sq - sum * sum / valid) / (valid - 1))) : 0.0f;
+    s.mean = static_cast<float>(mean);
+    s.std_dev = valid > 1 ? static_cast<float>(std::sqrt(m2 / (valid - 1))) : 0.0f;
 
     std::sort(values.begin(), values.end());
     auto percentile = [&](float p) -> float {

@@ -28,6 +28,10 @@ public:
     void log_transform_column(size_t col);
     void clip_outliers_column(size_t col, float lower_pct = 1.0f, float upper_pct = 99.0f);
 
+    void drop_row(size_t row);
+    void drop_column(size_t col);
+    void drop_rows_with_missing();
+
     void clear();
 
     void copy_history_from(const PreprocessPipeline& other);

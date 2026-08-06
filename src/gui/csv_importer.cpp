@@ -7,6 +7,17 @@
 
 namespace clustering {
 
+// Excel-style column letters: 0=A, 25=Z, 26=AA, 27=AB, ...
+static std::string col_letter(size_t n) {
+    std::string s;
+    while (true) {
+        s.insert(s.begin(), char('A' + n % 26));
+        if (n < 26) break;
+        n = n / 26 - 1;
+    }
+    return s;
+}
+
 CSVImporter::CSVImporter() : cancel_(false), loading_(false), progress_(0.0f) {}
 CSVImporter::~CSVImporter() { cancel(); }
 
@@ -44,15 +55,18 @@ CSVLoadResult CSVImporter::load(const std::string& path,
     progress_ = 0.0f;
 
     std::string line;
-    std::vector<std::vector<float>> rows;
     std::vector<std::string> col_names;
     std::vector<bool> numeric_cols;
-    size_t line_num = 0;
-    bool first = true;
+    std::vector<size_t> nan_count;
+    size_t d = 0;
+    bool first = true;           // no data row parsed yet
+    bool header_read = false;    // header line already consumed
+    size_t loaded = 0;
+    Matrix mat;
 
     while (std::getline(file, line)) {
         if (cancel_) { result.error = "Cancelled"; loading_ = false; return result; }
-        if (max_rows > 0 && (int)rows.size() >= max_rows) break;
+        if (max_rows > 0 && (int)loaded >= max_rows) break;
 
         std::vector<std::string> cells;
         std::stringstream ss(line);
@@ -69,66 +83,72 @@ CSVLoadResult CSVImporter::load(const std::string& path,
             cells.push_back(cell);
         }
 
-        if (first && has_header) {
+        // Skip blank lines (trailing newline, empty rows).
+        if (cells.empty() || (cells.size() == 1 && cells[0].empty())) continue;
+
+        if (first && has_header && !header_read) {
             col_names = cells;
-            numeric_cols.resize(cells.size(), true);
-            first = false;
+            header_read = true;
             continue;
         }
 
         if (first) {
-            numeric_cols.resize(cells.size(), true);
-            for (size_t j = 0; j < cells.size(); ++j)
-                col_names.push_back(std::string(1, 'A' + (char)j));
+            // First data row: fix the column count and allocate the matrix.
+            // Large matrices automatically spill to disk (RAM cap).
+            d = cells.size();
+            numeric_cols.assign(d, true);
+            nan_count.assign(d, 0);
+            col_names.clear();
+            for (size_t j = 0; j < d; ++j)
+                col_names.push_back(col_letter(j));
+            size_t est = total > 0 ? total - (has_header ? 1 : 0) : 0;
+            if (est == 0) est = 1;  // count_lines may miss a trailing newline
+            if (max_rows > 0) est = std::min(est, (size_t)max_rows);
+            mat.resize(est, d);
             first = false;
         }
 
+        // Parse this row directly into the matrix (streaming, no RAM copy).
         detect_types(cells, numeric_cols);
-
-        std::vector<float> row;
-        for (size_t j = 0; j < cells.size() && j < numeric_cols.size(); ++j) {
-            bool is_missing = false;
+        float* dst = mat[loaded];
+        for (size_t j = 0; j < d; ++j) {
+            bool miss = false;
             float val = 0.0f;
-            if (numeric_cols[j]) {
-                val = parse_cell(cells[j], is_missing);
+            if (j < cells.size() && numeric_cols[j]) {
+                val = parse_cell(cells[j], miss);
             } else {
-                is_missing = true;
+                miss = true;
                 val = std::numeric_limits<float>::quiet_NaN();
             }
-            row.push_back(val);
+            if (miss) {
+                val = std::numeric_limits<float>::quiet_NaN();
+                nan_count[j]++;
+            }
+            dst[j] = val;
         }
-        rows.push_back(std::move(row));
-        result.loaded_rows++;
+        loaded++;
 
-        if (progress) progress(result.loaded_rows, total);
-        line_num++;
+        result.loaded_rows = loaded;
+        if (progress) progress(loaded, total);
     }
 
     loading_ = false;
     progress_ = 1.0f;
 
-    if (rows.empty()) {
+    if (loaded == 0 || d == 0) {
         result.error = "No data rows found";
         return result;
     }
 
-    size_t n = rows.size();
-    size_t d = rows[0].size();
-    Matrix mat(n, d);
-    for (size_t i = 0; i < n; ++i)
-        for (size_t j = 0; j < d && j < rows[i].size(); ++j)
-            mat[i][j] = rows[i][j];
+    // Trim to the actual row count (estimated size may overshoot).
+    if (loaded < mat.rows()) mat.resize(loaded, d);
 
     // Drop columns where most values are NaN (text columns like labels/timestamps)
     // Threshold: >90% NaN → drop column
     std::vector<size_t> keep_cols;
     std::vector<std::string> keep_names;
     for (size_t j = 0; j < d; ++j) {
-        size_t nan_count = 0;
-        for (size_t i = 0; i < n; ++i) {
-            if (std::isnan(mat[i][j])) nan_count++;
-        }
-        if (nan_count * 10 < n * 9) {  // keep if <90% NaN
+        if (nan_count[j] * 10 < loaded * 9) {  // keep if <90% NaN
             keep_cols.push_back(j);
             if (j < col_names.size()) keep_names.push_back(col_names[j]);
         }
@@ -136,15 +156,15 @@ CSVLoadResult CSVImporter::load(const std::string& path,
 
     if (keep_cols.size() < d) {
         size_t new_d = keep_cols.size();
-        Matrix filtered(n, new_d);
-        for (size_t i = 0; i < n; ++i)
+        Matrix filtered(loaded, new_d);
+        for (size_t i = 0; i < loaded; ++i)
             for (size_t j = 0; j < new_d; ++j)
                 filtered[i][j] = mat[i][keep_cols[j]];
         mat = std::move(filtered);
         col_names = std::move(keep_names);
     }
 
-    result.table.set_data(mat, col_names);
+    result.table.set_data(std::move(mat), col_names);
     result.success = true;
     return result;
 }

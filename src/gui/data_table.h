@@ -15,8 +15,14 @@ struct PreprocessAction {
     std::string description;
     std::vector<std::pair<size_t, size_t>> cells;
     std::vector<float> old_values;
+    std::vector<float> new_values;
     size_t original_rows;
     std::vector<float> removed_rows;
+    // Column drops: col_index != SIZE_MAX means this action dropped a column.
+    size_t col_index = SIZE_MAX;
+    std::string col_name;
+    std::vector<float> col_values;
+    std::vector<uint8_t> col_missing;
 };
 
 class PreprocessPipeline;
@@ -32,6 +38,7 @@ public:
     DataTable& operator=(const DataTable&) = delete;
 
     void set_data(const Matrix& data, std::vector<std::string> col_names = {});
+    void set_data(Matrix&& data, std::vector<std::string> col_names = {});
     const Matrix& data() const { return data_; }
     Matrix& data_mut() { return data_; }
     size_t rows() const { return data_.rows(); }
@@ -50,12 +57,15 @@ public:
     void remove_row(size_t row);
     void remove_column(size_t col);
     void drop_rows_with_missing();
+    void insert_column(size_t col, const std::vector<float>& values,
+                       const std::vector<uint8_t>& missing, const std::string& name);
 
     PreprocessPipeline& pipeline() { return *pipeline_; }
     const PreprocessPipeline& pipeline() const { return *pipeline_; }
 
 private:
     friend class PreprocessPipeline;
+    void init_from_data(std::vector<std::string> col_names);
     Matrix data_;
     std::vector<std::string> col_names_;
     std::vector<uint8_t> missing_; // bitmask: 1=missing

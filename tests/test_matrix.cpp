@@ -5,8 +5,106 @@
 
 #include <gtest/gtest.h>
 #include "clustering/matrix.h"
+#include <cstdio>
 
 using namespace clustering;
+
+// Force disk-backed mode by setting a tiny RAM cap, then restore.
+struct DiskCapGuard {
+    size_t old;
+    DiskCapGuard(size_t bytes) : old(matrix_ram_cap()) { set_matrix_ram_cap(bytes); }
+    ~DiskCapGuard() { set_matrix_ram_cap(old); }
+};
+
+TEST(Matrix, DiskBackedSpill) {
+    DiskCapGuard g(256 * 1024);  // 256 KiB cap
+    Matrix m(2000, 100);         // 800 KiB -- must spill to disk
+    EXPECT_TRUE(m.is_disk_backed());
+    EXPECT_EQ(m.rows(), 2000u);
+    EXPECT_EQ(m.cols(), 100u);
+    EXPECT_EQ(m.disk_bytes_used(), 2000u * 100u * sizeof(float));
+    EXPECT_LT(m.ram_bytes_used(), 256u * 1024u);
+}
+
+TEST(Matrix, DiskBackedReadWrite) {
+    DiskCapGuard g(256 * 1024);
+    Matrix m(2000, 64);  // 512 KiB
+    ASSERT_TRUE(m.is_disk_backed());
+    for (size_t i = 0; i < m.rows(); i++)
+        for (size_t j = 0; j < m.cols(); j++)
+            m[i][j] = float(i * 1000 + j);
+    for (size_t i = 0; i < m.rows(); i++)
+        for (size_t j = 0; j < m.cols(); j++)
+            EXPECT_FLOAT_EQ(m[i][j], float(i * 1000 + j));
+}
+
+TEST(Matrix, DiskBackedDataThrows) {
+    DiskCapGuard g(256 * 1024);
+    Matrix m(2000, 64);
+    ASSERT_TRUE(m.is_disk_backed());
+    EXPECT_THROW(m.data(), std::runtime_error);
+    const Matrix& cm = m;
+    EXPECT_THROW(cm.data(), std::runtime_error);
+}
+
+TEST(Matrix, DiskBackedCopyAndMove) {
+    DiskCapGuard g(256 * 1024);
+    Matrix m(1500, 80);
+    ASSERT_TRUE(m.is_disk_backed());
+    for (size_t i = 0; i < m.rows(); i++) m[i][0] = float(i);
+
+    Matrix copy = m;  // deep copy with own temp file
+    ASSERT_TRUE(copy.is_disk_backed());
+    EXPECT_NE(m.disk_bytes_used(), 0u);
+    for (size_t i = 0; i < m.rows(); i++)
+        EXPECT_FLOAT_EQ(copy[i][0], float(i));
+
+    Matrix moved = std::move(copy);  // move transfers storage
+    ASSERT_TRUE(moved.is_disk_backed());
+    for (size_t i = 0; i < m.rows(); i++)
+        EXPECT_FLOAT_EQ(moved[i][0], float(i));
+
+    m.fill(42.0f);  // dirty write-back path
+    for (size_t i = 0; i < m.rows(); i++)
+        EXPECT_FLOAT_EQ(m[i][0], 42.0f);
+}
+
+TEST(Matrix, DiskBackedResize) {
+    DiskCapGuard g(64 * 1024);  // 64 KiB cap
+    Matrix m(1000, 32);         // 128 KiB
+    ASSERT_TRUE(m.is_disk_backed());
+    m[500][7] = 3.5f;
+    m.resize(1200, 32);  // grow
+    EXPECT_EQ(m.rows(), 1200u);
+    EXPECT_FLOAT_EQ(m[500][7], 3.5f);
+    m.resize(800, 32);   // shrink
+    EXPECT_EQ(m.rows(), 800u);
+    EXPECT_FLOAT_EQ(m[500][7], 3.5f);
+    EXPECT_FLOAT_EQ(m[0][0], 0.0f);  // new/unwritten area zeroed
+}
+
+TEST(Matrix, DiskBackedPromoteDemote) {
+    DiskCapGuard g(256 * 1024);
+    Matrix m(10, 4);  // small, inline
+    EXPECT_FALSE(m.is_disk_backed());
+    m[3][1] = 9.0f;
+    m.resize(100000, 4);  // 1.6 MiB -> promote
+    EXPECT_TRUE(m.is_disk_backed());
+    EXPECT_FLOAT_EQ(m[3][1], 9.0f);
+    m.resize(10, 4);  // demote back to RAM
+    EXPECT_FALSE(m.is_disk_backed());
+    EXPECT_FLOAT_EQ(m[3][1], 9.0f);
+}
+
+TEST(Matrix, DiskBackedColumnChangeRebuild) {
+    DiskCapGuard g(64 * 1024);  // 64 KiB cap
+    Matrix m(500, 40);          // 80 KiB
+    ASSERT_TRUE(m.is_disk_backed());
+    for (size_t i = 0; i < m.rows(); i++) m[i][39] = float(i);
+    m.resize(500, 30);  // column drop forces rebuild
+    EXPECT_EQ(m.cols(), 30u);
+    EXPECT_FLOAT_EQ(m[0][0], 0.0f);
+}
 
 TEST(Matrix, DefaultConstructor) {
     Matrix m;

@@ -73,7 +73,7 @@ void MissingHandler::drop_rows(DataTable& table) {
 
     PreprocessAction action;
     action.description = "Drop " + std::to_string(orig_r - keep.size()) + " rows with missing values";
-    action.original_rows = orig_r;
+    action.original_rows = keep.size();
     action.removed_rows = std::move(removed);
     for (size_t i = 0; i < orig_r; ++i)
         if (table.row_missing_count(i) > 0)
@@ -131,6 +131,7 @@ void MissingHandler::mean_impute_column(DataTable& table, size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
             table.fill_value(i, col, mean);
+            action.new_values.push_back(mean);
         }
     }
     if (!action.cells.empty()) table.pipeline().apply(std::move(action));
@@ -158,6 +159,7 @@ void MissingHandler::median_impute_column(DataTable& table, size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
             table.fill_value(i, col, median);
+            action.new_values.push_back(median);
         }
     }
     if (!action.cells.empty()) table.pipeline().apply(std::move(action));
@@ -187,6 +189,7 @@ void MissingHandler::mode_impute_column(DataTable& table, size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
             table.fill_value(i, col, mode);
+            action.new_values.push_back(mode);
         }
     }
     if (!action.cells.empty()) table.pipeline().apply(std::move(action));
@@ -207,6 +210,7 @@ void MissingHandler::constant_fill_column(DataTable& table, size_t col) {
             action.cells.push_back({i, col});
             action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
             table.fill_value(i, col, val);
+            action.new_values.push_back(val);
         }
     }
     if (!action.cells.empty()) table.pipeline().apply(std::move(action));
@@ -229,6 +233,7 @@ void MissingHandler::forward_fill_column(DataTable& table, size_t col) {
                 action.cells.push_back({i, col});
                 action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
                 table.fill_value(i, col, last_valid);
+                action.new_values.push_back(last_valid);
             }
         } else {
             last_valid = table.data()[i][col];
@@ -265,14 +270,17 @@ void MissingHandler::linear_interpolate_column(DataTable& table, size_t col) {
                 action.cells.push_back({k, col});
                 action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
                 table.fill_value(k, col, val);
+                action.new_values.push_back(val);
             } else if (has_before) {
                 action.cells.push_back({k, col});
                 action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
                 table.fill_value(k, col, v_before);
+                action.new_values.push_back(v_before);
             } else if (has_after) {
                 action.cells.push_back({k, col});
                 action.old_values.push_back(std::numeric_limits<float>::quiet_NaN());
                 table.fill_value(k, col, v_after);
+                action.new_values.push_back(v_after);
             }
         }
         i = after;

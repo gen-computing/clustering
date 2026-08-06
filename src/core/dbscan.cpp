@@ -13,9 +13,9 @@
 
 namespace clustering {
 
-// Use a fixed dimension of 3 for the KD-tree (pad 2D data with zeros)
-// This avoids template issues with variable dimensions.
-static const int KD_DIM = 3;
+// Runtime dimension: nanoflann supports DIM=-1 (dimension passed at
+// construction), so all features are used regardless of column count.
+static const int KD_DIM = -1;
 
 using KDTreeIndex = nanoflann::KDTreeSingleIndexAdaptor<
     nanoflann::L2_Simple_Adaptor<float, DBSCAN::KDTreeAdaptor>,
@@ -34,21 +34,54 @@ DBSCAN::DBSCAN(const DBSCANConfig& config)
 DBSCAN::~DBSCAN() = default;
 
 // ============================================================================
+// build_scaled() — Z-SCORE THE INPUT (per column) WHEN CONFIGURED
+// ============================================================================
+void DBSCAN::build_scaled(const Matrix& X) {
+    size_t n = X.rows(), d = X.cols();
+    scale_mean_.assign(d, 0.0f);
+    scale_std_.assign(d, 0.0f);
+    if (n == 0) return;
+
+    for (size_t j = 0; j < d; ++j) {
+        double sum = 0.0;
+        for (size_t i = 0; i < n; ++i) sum += X[i][j];
+        float mean = (float)(sum / n);
+        double sq = 0.0;
+        for (size_t i = 0; i < n; ++i) {
+            double v = X[i][j] - mean;
+            sq += v * v;
+        }
+        float sd = (float)std::sqrt(sq / n);
+        scale_mean_[j] = mean;
+        scale_std_[j] = sd > 1e-12f ? sd : 1.0f;  // constant column: leave as-is
+    }
+
+    X_scaled_.resize(n, d);
+    for (size_t i = 0; i < n; ++i)
+        for (size_t j = 0; j < d; ++j)
+            X_scaled_[i][j] = (X[i][j] - scale_mean_[j]) / scale_std_[j];
+}
+
+// ============================================================================
 // fit() — MAIN DBSCAN ALGORITHM
 // ============================================================================
 void DBSCAN::fit(const Matrix& X) {
-    LOG_INFO("DBSCAN::fit: n=%zu, d=%zu, eps=%.3f, min_pts=%zu",
-             X.rows(), X.cols(), config_.epsilon, config_.min_pts);
+    LOG_INFO("DBSCAN::fit: n=%zu, d=%zu, eps=%.3f, min_pts=%zu%s",
+             X.rows(), X.cols(), config_.epsilon, config_.min_pts,
+             config_.standardize ? " [standardized]" : "");
 
     validate_matrix(X);
     validate_dbscan(config_.epsilon, config_.min_pts);
 
     // Store training data
     X_ = X;
+    X_scaled_ = Matrix();
+    if (config_.standardize) build_scaled(X);
+    const Matrix& S = config_.standardize ? X_scaled_ : X_;
 
-    // Build KD-tree once for all queries
-    auto adaptor = std::make_unique<KDTreeAdaptor>(X_);
-    auto* index = new KDTreeIndex(3, *adaptor);
+    // Build KD-tree once for all queries (over scaled space if configured)
+    auto adaptor = std::make_unique<KDTreeAdaptor>(S);
+    auto* index = new KDTreeIndex((int)S.cols(), *adaptor);
     index->buildIndex();
 
     // Store index and adaptor for reuse across all region_query calls
@@ -100,16 +133,16 @@ void DBSCAN::region_query(size_t point_idx, std::vector<size_t>& neighbors) cons
 
     auto* index = static_cast<KDTreeIndex*>(kdtree_index_);
 
-    // Pad query point to KD_DIM (3) dimensions
-    float query_point[KD_DIM] = {0, 0, 0};
-    for (size_t d = 0; d < X_.cols() && d < KD_DIM; ++d) {
-        query_point[d] = X_[point_idx][d];
+    const Matrix& S = config_.standardize ? X_scaled_ : X_;
+    std::vector<float> query_point(S.cols(), 0.0f);
+    for (size_t d = 0; d < S.cols(); ++d) {
+        query_point[d] = S[point_idx][d];
     }
 
     float search_radius = config_.epsilon * config_.epsilon;
     std::vector<std::pair<size_t, float>> result_pairs;
 
-    index->radiusSearch(query_point, search_radius, result_pairs,
+    index->radiusSearch(query_point.data(), search_radius, result_pairs,
                         nanoflann::SearchParams(10, 0, false));
 
     neighbors.reserve(result_pairs.size());
@@ -170,14 +203,17 @@ Vector DBSCAN::predict(const Matrix& X) const {
     auto* index = static_cast<KDTreeIndex*>(kdtree_index_);
 
     for (size_t i = 0; i < n; ++i) {
-        float query_point[KD_DIM] = {0, 0, 0};
-        for (size_t d = 0; d < X.cols() && d < KD_DIM; ++d) {
-            query_point[d] = X[i][d];
+        std::vector<float> query_point(X.cols(), 0.0f);
+        for (size_t d = 0; d < X.cols(); ++d) {
+            float v = X[i][d];
+            if (config_.standardize && d < scale_mean_.size())
+                v = (v - scale_mean_[d]) / scale_std_[d];
+            query_point[d] = v;
         }
 
         size_t nearest_idx;
         float nearest_dist_sq;
-        index->knnSearch(query_point, 1, &nearest_idx, &nearest_dist_sq);
+        index->knnSearch(query_point.data(), 1, &nearest_idx, &nearest_dist_sq);
 
         if (std::sqrt(nearest_dist_sq) <= config_.epsilon) {
             result[i] = labels_[nearest_idx];
@@ -192,12 +228,33 @@ Vector DBSCAN::predict(const Matrix& X) const {
 // ============================================================================
 // estimate_epsilon()
 // ============================================================================
-float DBSCAN::estimate_epsilon(const Matrix& X, size_t min_pts, size_t sample_size) {
+float DBSCAN::estimate_epsilon(const Matrix& X, size_t min_pts, size_t sample_size, bool standardize) {
     size_t n = X.rows();
     if (n < 2) return 0.5f;
 
-    KDTreeAdaptor adaptor(X);
-    KDTreeIndex index(3, adaptor);
+    // Work in z-scored space when requested so the estimate is scale-free.
+    Matrix S;
+    if (standardize) {
+        size_t d = X.cols();
+        S.resize(n, d);
+        for (size_t j = 0; j < d; ++j) {
+            double sum = 0.0;
+            for (size_t i = 0; i < n; ++i) sum += X[i][j];
+            float mean = (float)(sum / n);
+            double sq = 0.0;
+            for (size_t i = 0; i < n; ++i) {
+                double v = X[i][j] - mean;
+                sq += v * v;
+            }
+            float sd = (float)std::sqrt(sq / n);
+            if (sd <= 1e-12f) sd = 1.0f;
+            for (size_t i = 0; i < n; ++i)
+                S[i][j] = (X[i][j] - mean) / sd;
+        }
+    }
+
+    KDTreeAdaptor adaptor(standardize ? S : X);
+    KDTreeIndex index((int)(standardize ? S : X).cols(), adaptor);
     index.buildIndex();
 
     size_t sn = std::min(sample_size, n);
@@ -209,15 +266,15 @@ float DBSCAN::estimate_epsilon(const Matrix& X, size_t min_pts, size_t sample_si
         size_t pi = si * step;
         if (pi >= n) break;
 
-        float query_point[3];
-        for (size_t d = 0; d < X.cols(); ++d) {
-            query_point[d] = X[pi][d];
+        std::vector<float> query_point(standardize ? S.cols() : X.cols(), 0.0f);
+        for (size_t d = 0; d < query_point.size(); ++d) {
+            query_point[d] = standardize ? S[pi][d] : X[pi][d];
         }
 
         size_t k = std::min(min_pts, n - 1);
         std::vector<size_t> indices(k);
         std::vector<float> dists_sq(k);
-        index.knnSearch(query_point, k, indices.data(), dists_sq.data());
+        index.knnSearch(query_point.data(), k, indices.data(), dists_sq.data());
 
         sum_knn += std::sqrt(dists_sq[k - 1]);
         count++;

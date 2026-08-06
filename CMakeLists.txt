@@ -115,6 +115,7 @@ if(BUILD_GUI)
         src/gui/csv_importer.cpp
         src/gui/preprocess_pipeline.cpp
         src/gui/missing_handler.cpp
+        src/gui/exports.cpp
     )
 
     add_library(clustering_gui ${CLUSTERING_GUI_SOURCES})
@@ -193,6 +194,10 @@ if(BUILD_BENCHMARK)
     add_executable(benchmark_exe benchmarks/benchmark.cpp)
     target_link_libraries(benchmark_exe clustering)
     set_target_properties(benchmark_exe PROPERTIES OUTPUT_NAME "benchmark")
+
+    add_executable(stress_bench benchmarks/stress_bench.cpp)
+    target_link_libraries(stress_bench clustering)
+    set_target_properties(stress_bench PROPERTIES OUTPUT_NAME "stress_bench")
 endif()
 
 # ==============================================================================
@@ -208,7 +213,14 @@ if(BUILD_TESTS AND GTest_FOUND)
         tests/test_matrix.cpp
         tests/test_dbscan.cpp
         tests/test_evaluation.cpp
+        tests/test_real_data.cpp
+        tests/test_drops_exports.cpp
+        src/gui/data_table.cpp
+        src/gui/preprocess_pipeline.cpp
+        src/gui/exports.cpp
+        src/gui/missing_handler.cpp
     )
+    target_include_directories(tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(tests clustering GTest::gtest_main)
     add_test(NAME clustering_tests COMMAND tests)
 endif()

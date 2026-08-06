@@ -144,7 +144,6 @@ void TSNE::compute_pairwise_probabilities(const Matrix& X) {
                     sum_p += P_[i][j];
                 }
             }
-            }
 
             // Normalize so probabilities sum to 1.
             if (sum_p > 0) {

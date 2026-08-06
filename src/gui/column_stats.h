@@ -29,7 +29,8 @@ public:
     void set_data(const DataTable* table);
     void invalidate();
     void invalidate_column(size_t col);
-    const ColumnStats& get(size_t col);
+    // Returns nullptr when col is out of range (no static scratch state).
+    const ColumnStats* get(size_t col);
     std::vector<float> sample_for_histogram(size_t col, size_t n_samples = 1000) const;
 
 private:

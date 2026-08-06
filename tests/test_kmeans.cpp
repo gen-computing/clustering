@@ -120,3 +120,47 @@ TEST(DistanceTest, KnownDistance) {
     float dist = l2_distance_avx2(a, b, 2);
     EXPECT_NEAR(dist, 5.0f, 1e-5f);
 }
+
+// ============================================================================
+// MiniBatchKMeans tests (bug #1 regression: learning rate decay across
+// partial_fit() calls; fix: local iteration counter).
+// ============================================================================
+
+#include "clustering/mini_batch.h"
+
+TEST(MiniBatchKMeans, PartialFitWithoutFitDelegates) {
+    // partial_fit() on an unfitted model must behave like fit().
+    Matrix X(20, 2);
+    for (size_t i = 0; i < 10; ++i) { X[i][0] = 0.0f; X[i][1] = 0.0f; }
+    for (size_t i = 10; i < 20; ++i) { X[i][0] = 10.0f; X[i][1] = 10.0f; }
+    MiniBatchKMeans mb(2, 5);
+    mb.partial_fit(X);
+    EXPECT_EQ(mb.labels().size(), 20u);
+    // Two well-separated blobs: both clusters should be found.
+    EXPECT_EQ(mb.centroids().rows(), 2u);
+    // Each centroid must sit near SOME blob (label order not guaranteed).
+    auto near_blob = [](float x, float y) {
+        float da = x * x + y * y;                       // blob A at (0,0)
+        float db = (x - 10) * (x - 10) + (y - 10) * (y - 10);  // blob B at (10,10)
+        return std::min(da, db);
+    };
+    EXPECT_LT(near_blob(mb.centroids()[0][0], mb.centroids()[0][1]), 4.0f);
+    EXPECT_LT(near_blob(mb.centroids()[1][0], mb.centroids()[1][1]), 4.0f);
+}
+
+TEST(MiniBatchKMeans, MultiplePartialFitsMoveCentroids) {
+    // Repeated partial_fit() with shifted data must keep moving (the old bug
+    // froze learning rate at n_iter()==0, making later batches no-ops).
+    Matrix a(30, 2), b(30, 2);
+    for (size_t i = 0; i < 30; ++i) { a[i][0] = 1.0f; a[i][1] = 1.0f; b[i][0] = 9.0f; b[i][1] = 9.0f; }
+    MiniBatchKMeans mb(1, 10);
+    mb.partial_fit(a);
+    float first_x = mb.centroids()[0][0];
+    mb.partial_fit(b);
+    float second_x = mb.centroids()[0][0];
+    mb.partial_fit(b);
+    float third_x = mb.centroids()[0][0];
+    EXPECT_LT(first_x, 5.0f) << "initially near blob A";
+    EXPECT_GT(second_x, first_x) << "moves toward blob B";
+    EXPECT_GT(third_x, 8.0f) << "converges on blob B despite decaying learning rate";
+}

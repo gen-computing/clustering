@@ -85,6 +85,9 @@ public:
     //                If data has only 2 columns, Z is set to 0.
     //   labels    -- which cluster each point belongs to (determines color).
     //   centroids -- cluster centers (shown as larger white dots).
+    // Small point matrices are copied. Matrices larger than 128 MiB are
+    // referenced (not copied) to avoid per-frame copies of disk-backed data;
+    // the caller must keep such points alive while the renderer shows them.
     void set_data(const Matrix& points, const Vector& labels, const Matrix& centroids);
 
     // set_metrics: Set the numbers shown in the text overlay.
@@ -135,6 +138,11 @@ private:
     //   6. Draw centroids as larger white circles.
     //   7. Draw text overlay (engine name, point count, clusters, inertia, FPS).
     void render_frame();
+
+    // render_impl: Shared scene drawing (axes, points, centroids, text overlay)
+    // used by both render_frame() and render_to_fbo(). Viewport/clear/framebuffer
+    // handling stays in the callers; this draws into whatever is bound.
+    void render_impl(int width, int height, bool with_fps);
 
     RendererConfig config_;    // Window and display settings
 

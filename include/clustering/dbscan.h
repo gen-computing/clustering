@@ -13,6 +13,8 @@ struct DBSCANConfig {
     size_t min_pts = 5;         // Minimum neighbors to be a "core point".
                                  // Higher = stricter cluster definition = more points marked as noise.
     size_t max_threads = 0;     // 0 = auto-detect threads for distance computation.
+    bool standardize = false;   // Z-score each column before clustering. Makes epsilon
+                                 // scale-free (typical values 0.3-2.0) instead of raw units.
 };
 
 class DBSCAN {
@@ -31,10 +33,11 @@ public:
     void set_epsilon(float eps) { config_.epsilon = eps; }
     void set_min_pts(size_t m) { config_.min_pts = m; }
 
-    static float estimate_epsilon(const Matrix& X, size_t min_pts = 5, size_t sample_size = 500);
+    static float estimate_epsilon(const Matrix& X, size_t min_pts = 5,
+                                  size_t sample_size = 500, bool standardize = false);
 
     // nanoflann adapter — public so KDTreeIndex type alias can reference it
-    // KD-tree uses DIM=3 internally; 2D data gets z=0 padding.
+    // KD-tree uses runtime dimension (all features of the data).
     struct KDTreeAdaptor {
         const Matrix& data;
         size_t dim;
@@ -50,10 +53,14 @@ public:
 private:
     void region_query(size_t point_idx, std::vector<size_t>& neighbors) const;
     void expand_cluster(size_t point_idx, size_t cluster_id);
+    void build_scaled(const Matrix& X);
 
     DBSCANConfig config_;
     Vector labels_;
-    Matrix X_;
+    Matrix X_;          // Original (unscaled) training data
+    Matrix X_scaled_;   // Z-scored copy when config_.standardize is true
+    std::vector<float> scale_mean_;
+    std::vector<float> scale_std_;
     size_t n_clusters_;
     size_t n_noise_;
     bool fitted_;

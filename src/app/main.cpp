@@ -19,6 +19,11 @@
 
 using namespace clustering_app;
 
+namespace clustering_app {
+ImFont* g_font_big = nullptr;
+ImFont* g_font_header = nullptr;
+}
+
 static void glfw_error_callback(int error, const char* description) {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
@@ -46,6 +51,23 @@ int main() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
+
+    // Large fonts: DejaVu Sans from system (fallback: scaled default bitmap font).
+    const char* font_paths[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    };
+    ImFont* font_loaded = nullptr;
+    for (const char* fp : font_paths) {
+        font_loaded = io.Fonts->AddFontFromFileTTF(fp, 15.0f);
+        if (font_loaded) break;
+    }
+    if (!font_loaded) font_loaded = io.Fonts->AddFontDefault();
+    g_font_big = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18.0f);
+    if (!g_font_big) { ImFontConfig cbig; cbig.SizePixels = 18.0f; g_font_big = io.Fonts->AddFontDefault(&cbig); }
+    g_font_header = io.Fonts->AddFontFromFileTTF("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 26.0f);
+    if (!g_font_header) { ImFontConfig chdr; chdr.SizePixels = 26.0f; g_font_header = io.Fonts->AddFontDefault(&chdr); }
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -77,10 +99,11 @@ int main() {
         // Menu bar
         render_menu_bar(g);
 
-        // Tab bar
+        // Tab bar (leave room at the bottom for the status bar)
         static int active_tab = 0;
+        float status_h = ImGui::GetFrameHeight() * 2 + 8;
         ImGui::SetNextWindowPos(ImVec2(0, ImGui::GetFrameHeight()));
-        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y - ImGui::GetFrameHeight()),
+        ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y - ImGui::GetFrameHeight() - status_h),
             ImGuiCond_Always);
         ImGui::Begin("##Main", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
@@ -88,9 +111,11 @@ int main() {
             ImGuiWindowFlags_NoBringToFrontOnFocus);
 
         if (ImGui::BeginTabBar("##Tabs")) {
-            if (ImGui::BeginTabItem("Preprocess")) { active_tab = 0; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Dimensionality Reduction")) { active_tab = 1; ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Cluster & Evaluate")) { active_tab = 2; ImGui::EndTabItem(); }
+            ImGui::PushFont(g_font_big);
+            if (ImGui::BeginTabItem("1. Preprocess")) { active_tab = 0; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("2. Dimension Reduction")) { active_tab = 1; ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("3. Cluster & Evaluate")) { active_tab = 2; ImGui::EndTabItem(); }
+            ImGui::PopFont();
             ImGui::EndTabBar();
         }
 
@@ -140,7 +165,7 @@ int main() {
         ImGui::End(); // Main
 
         // Status bar
-        render_status_bar(g);
+        render_status_bar(g, active_tab);
 
         // Render
         ImGui::Render();
@@ -156,6 +181,7 @@ int main() {
     // Cleanup
     if (g.cluster_thread.joinable()) g.cluster_thread.join();
     if (g.eval_thread.joinable()) g.eval_thread.join();
+    if (g.tsne_thread.joinable()) g.tsne_thread.join();
     delete g.kmeans;
     delete g.renderer_obj;
     ImGui_ImplOpenGL3_Shutdown();
